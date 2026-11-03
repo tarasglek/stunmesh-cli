@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -51,8 +50,7 @@ func moshApplet(args []string, p proc) int {
 		return fail(p, "mosh", err)
 	}
 	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
-	clientCfg, closeAuth, err := sshClientConfig(p, a.user, hostport, net.TCPAddrFromAddrPort(netip.AddrPortFrom(addr, a.port)),
-		hostAliases(cfg, a.host, a.port)...)
+	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}

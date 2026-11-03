@@ -142,6 +142,7 @@ func TestSSHRejects(t *testing.T) {
 		{[]string{"ssh", "nosuch"}, "not in the compiled-in hosts table"},
 		{[]string{"ssh", "-L", "x", "remote-01"}, "forward"},
 		{[]string{"ssh", "alice@remote-01"}, "run sm keygen"},
+		{[]string{"ssh", "-i", "/nonexistent/id", "alice@remote-01"}, "/nonexistent/id"}, // -i reaches Auth
 	} {
 		code, _, errs := runEnv(env, append([]string{"sm"}, tc.args...)...)
 		if code != 255 || !strings.Contains(errs, tc.err) {

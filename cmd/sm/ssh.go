@@ -148,8 +148,7 @@ func sshApplet(args []string, p proc) int {
 		return failSSH(p, err)
 	}
 	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
-	clientCfg, closeAuth, err := sshClientConfig(p, a.user, hostport, net.TCPAddrFromAddrPort(netip.AddrPortFrom(addr, a.port)),
-		hostAliases(cfg, a.host, a.port)...)
+	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr)
 	if err != nil {
 		return failSSH(p, err)
 	}
@@ -260,11 +259,14 @@ func hostAliases(cfg mesh.Config, host string, port uint16) []string {
 	return out
 }
 
-// sshClientConfig is OpenSSH's defaults from ~/.ssh: the agent, the
-// default identities and known_hosts, asking on the terminal, with the
-// host key types known_hosts has for hostport, at remote, or under one of
-// its aliases, preferred.
-func sshClientConfig(p proc, user, hostport string, remote net.Addr, aliases ...string) (*ssh.ClientConfig, func(), error) {
+// sshClientConfig is OpenSSH's defaults from ~/.ssh, as the user named
+// the host in a: the agent, -i identities, then the default ones, and
+// known_hosts, asking on the terminal, with the host key types known_hosts
+// has for the host at addr, under any of its mesh names, preferred.
+func sshClientConfig(p proc, a sshArgs, cfg mesh.Config, addr netip.Addr) (*ssh.ClientConfig, func(), error) {
+	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
+	remote := net.TCPAddrFromAddrPort(netip.AddrPortFrom(addr, a.port))
+	aliases := hostAliases(cfg, a.host, a.port)
 	home := p.getenv("HOME")
 	if home == "" {
 		return nil, nil, errors.New("no HOME for ~/.ssh")
@@ -274,7 +276,7 @@ func sshClientConfig(p proc, user, hostport string, remote net.Addr, aliases ...
 	for _, n := range []string{"id_ed25519", "id_ecdsa", "id_rsa"} {
 		defaults = append(defaults, filepath.Join(dir, n))
 	}
-	methods, closeAuth, err := sshc.Auth{AgentSock: p.getenv("SSH_AUTH_SOCK"), Defaults: defaults, Prompt: p.prompt}.Methods()
+	methods, closeAuth, err := sshc.Auth{AgentSock: p.getenv("SSH_AUTH_SOCK"), Identities: a.identities, Defaults: defaults, Prompt: p.prompt}.Methods()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -297,7 +299,7 @@ func sshClientConfig(p proc, user, hostport string, remote net.Addr, aliases ...
 		closeAuth()
 		return nil, nil, err
 	}
-	return &ssh.ClientConfig{User: user, Auth: methods, HostKeyCallback: hk, HostKeyAlgorithms: algos}, closeAuth, nil
+	return &ssh.ClientConfig{User: a.user, Auth: methods, HostKeyCallback: hk, HostKeyAlgorithms: algos}, closeAuth, nil
 }
 
 // runSession runs command, or a shell when it is empty, and returns its
