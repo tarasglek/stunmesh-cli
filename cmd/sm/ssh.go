@@ -36,14 +36,15 @@ type sshArgs struct {
 	args       []string // the command words, for mosh-server to exec
 	noCommand  bool     // -N
 	verbose    int      // -v, -vv
+	userFrom   string   // where user came from, for -v
 }
 
 // parseSSHArgs reads the OpenSSH options the applet supports, as
 // "-L spec" or "-Lspec". As in ssh, options may come before or after the
 // destination, and "--" or the first word after the destination starts
 // the command, joined with spaces as ssh joins it.
-func parseSSHArgs(args []string, defaultUser string) (sshArgs, error) {
-	a := sshArgs{port: 22, user: defaultUser}
+func parseSSHArgs(args []string, defaultUser func(host string) (user, from string)) (sshArgs, error) {
+	a := sshArgs{port: 22}
 	userSet, dest := false, ""
 	for len(args) > 0 {
 		opt := args[0]
@@ -101,18 +102,22 @@ func parseSSHArgs(args []string, defaultUser string) (sshArgs, error) {
 			}
 			a.port = uint16(n)
 		case 'l':
-			a.user, userSet = val, true
+			a.user, a.userFrom, userSet = val, "-l", true
 		}
 	}
 	if dest == "" {
 		return a, errors.New("no destination")
 	}
 	a.host = dest
-	if u, h, ok := strings.Cut(dest, "@"); ok {
+	u, h, at := strings.Cut(dest, "@")
+	if at {
 		if !userSet {
-			a.user = u
+			a.user, a.userFrom = u, "user@host"
 		}
 		a.host = h
+	}
+	if !at && !userSet && a.host != "" {
+		a.user, a.userFrom = defaultUser(a.host)
 	}
 	if a.host == "" || a.user == "" {
 		return a, errors.New("no host or user")
@@ -130,7 +135,7 @@ func parseSSHArgs(args []string, defaultUser string) (sshArgs, error) {
 // sshApplet logs in to a mesh host over the userspace node: a shell, a
 // command, or with -N only the forwards.
 func sshApplet(args []string, p proc) int {
-	a, err := parseSSHArgs(args, p.getenv("USER"))
+	a, err := parseSSHArgs(args, defaultUser(p))
 	if err != nil {
 		fmt.Fprintf(p.err, "%s ssh: %v\n"+sshUsage, self, err, self)
 		return 255
@@ -155,6 +160,7 @@ func sshApplet(args []string, p proc) int {
 	}
 	dbg := debugf(p, "ssh", a.verbose)
 	dbg("%s is %s in the hosts table; node narrowed to %d peer(s)", a.host, addr, len(cfg.Peers))
+	dbg("user %s from %s", a.user, a.userFrom)
 	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr, dbg)
 	if err != nil {
 		return failSSH(p, err)
@@ -437,4 +443,24 @@ func startTerminal(sess *ssh.Session, in *os.File, termName string) (func(), err
 		close(winch)
 		_ = term.Restore(fd, state)
 	}, nil
+}
+
+// defaultUser is the login name for a host the user named without one, as
+// ssh picks it: User from ~/.ssh/config for the host as typed, then $USER,
+// with where it came from, for -v. On Android $USER is the app's uid name
+// (u0_a123), so the config is what gives the real one. A User set only in
+// a Match block is not seen, and -v then says $USER.
+func defaultUser(p proc) func(host string) (string, string) {
+	return func(host string) (string, string) {
+		if home := p.getenv("HOME"); home != "" {
+			conf := filepath.Join(home, ".ssh", "config")
+			if f, err := os.Open(conf); err == nil {
+				defer f.Close()
+				if u, err := sshc.ConfigUser(f, host); err == nil && u != "" {
+					return u, conf
+				}
+			}
+		}
+		return p.getenv("USER"), "$USER"
+	}
 }

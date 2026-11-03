@@ -24,7 +24,7 @@ const moshUsage = "usage: %s mosh [-v] [-i identity]... [-p port] [-l user] [use
 // node: mosh-server is started over SSH, then the session runs over UDP
 // through the node, surviving network changes as mosh does. Ctrl-^ . quits.
 func moshApplet(args []string, p proc) int {
-	a, err := parseSSHArgs(args, p.getenv("USER"))
+	a, err := parseSSHArgs(args, defaultUser(p))
 	if err == nil && (len(a.local) > 0 || len(a.remote) > 0 || a.noCommand) {
 		err = errors.New("mosh takes no -L, -R or -N")
 	}
@@ -49,6 +49,7 @@ func moshApplet(args []string, p proc) int {
 	}
 	dbg := debugf(p, "mosh", a.verbose)
 	dbg("%s is %s in the hosts table; node narrowed to %d peer(s)", a.host, addr, len(cfg.Peers))
+	dbg("user %s from %s", a.user, a.userFrom)
 	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr, dbg)
 	if err != nil {
 		return fail(p, "mosh", err)

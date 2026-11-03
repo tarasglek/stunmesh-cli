@@ -25,6 +25,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// me is a default user that is the same for every host.
+func me(string) (string, string) { return "me", "test" }
+
 func TestParseSSHArgs(t *testing.T) {
 	fwd := func(s string) sshc.Forward {
 		f, err := sshc.ParseForward(s)
@@ -50,18 +53,19 @@ func TestParseSSHArgs(t *testing.T) {
 		{[]string{"-v", "h"}, sshArgs{port: 22, user: "me", host: "h", verbose: 1}},
 		{[]string{"-vv", "-v", "h"}, sshArgs{port: 22, user: "me", host: "h", verbose: 3}},
 	} {
-		got, err := parseSSHArgs(tc.args, "me")
+		got, err := parseSSHArgs(tc.args, me)
+		got.userFrom = "" // TestDefaultUser covers it
 		if err != nil || !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("parseSSHArgs(%q) = %+v, %v\nwant %+v", tc.args, got, err, tc.want)
 		}
 	}
 	for _, args := range [][]string{nil, {"-p"}, {"-vx", "h"}, {"-p", "x", "h"}, {"-p", "0", "h"}, {"-X", "h"}, {"-L", "bad", "h"},
 		{"-N", "h", "ls"}, {"@h"}, {"u@"}} {
-		if a, err := parseSSHArgs(args, "me"); err == nil {
+		if a, err := parseSSHArgs(args, me); err == nil {
 			t.Errorf("parseSSHArgs(%q) = %+v, want error", args, a)
 		}
 	}
-	if _, err := parseSSHArgs([]string{"h"}, ""); err == nil {
+	if _, err := parseSSHArgs([]string{"h"}, func(string) (string, string) { return "", "test" }); err == nil {
 		t.Error("no user anywhere accepted")
 	}
 }
@@ -249,5 +253,38 @@ func TestSSHVerbose(t *testing.T) {
 		if got := logger(p, v) != nil; got != want {
 			t.Errorf("logger at -v x%d: %v", v, got)
 		}
+	}
+}
+
+// Without user@ or -l the user comes from ~/.ssh/config for the host as
+// typed, then $USER, as in ssh; explicit ones win.
+func TestDefaultUser(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	conf := "Host remote-*\n  User r1user\nHost *\n  User alice\n"
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "config"), []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := testProc(map[string]string{"HOME": home, "USER": "u0_a123"}, &bytes.Buffer{}, &bytes.Buffer{})
+	path := filepath.Join(home, ".ssh", "config")
+	for _, tc := range []struct {
+		args       []string
+		user, from string
+	}{
+		{[]string{"remote-01"}, "r1user", path},
+		{[]string{"desk"}, "alice", path},
+		{[]string{"root@desk"}, "root", "user@host"},
+		{[]string{"-l", "admin", "remote-01"}, "admin", "-l"},
+	} {
+		a, err := parseSSHArgs(tc.args, defaultUser(p))
+		if err != nil || a.user != tc.user || a.userFrom != tc.from {
+			t.Errorf("%q: user %q from %q, %v; want %q from %q", tc.args, a.user, a.userFrom, err, tc.user, tc.from)
+		}
+	}
+	p = testProc(map[string]string{"HOME": t.TempDir(), "USER": "u0_a123"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if u, from := defaultUser(p)("desk"); u != "u0_a123" || from != "$USER" {
+		t.Errorf("no config: %q from %q", u, from)
 	}
 }
