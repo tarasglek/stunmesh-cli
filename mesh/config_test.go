@@ -3,6 +3,7 @@
 package mesh
 
 import (
+	"encoding/json"
 	"net/netip"
 	"strings"
 	"testing"
@@ -78,6 +79,45 @@ func TestLookup(t *testing.T) {
 		_, err := c.Lookup(host)
 		if err == nil || !strings.Contains(err.Error(), "not in the compiled-in hosts table") {
 			t.Errorf("Lookup(%q) err = %v", host, err)
+		}
+	}
+}
+
+func TestNarrow(t *testing.T) {
+	c, err := ParseConfig([]byte(testConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := c.Narrow(netip.MustParseAddr("10.200.0.5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(n.Peers) != 1 || len(c.Peers) != 2 {
+		t.Fatalf("peers: narrowed %v, original %v", n.Peers, c.Peers)
+	}
+	var doc struct {
+		Peers []struct{ Name string } `json:"peers"`
+		Hosts map[string]string       `json:"hosts"`
+		Stun  any                     `json:"stun"`
+	}
+	if err := json.Unmarshal(n.Tunnel, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Peers) != 1 || doc.Peers[0].Name != "Remote-01" || len(doc.Hosts) != 3 || doc.Stun == nil {
+		t.Errorf("narrowed tunnel = %s", n.Tunnel)
+	}
+	// The narrowed config still resolves every host and parses back.
+	if a, err := n.Lookup("desk"); err != nil || a != netip.MustParseAddr("10.200.0.1") {
+		t.Errorf("Lookup after Narrow: %v %v", a, err)
+	}
+	if _, err := ParseConfig(n.Tunnel); err != nil {
+		t.Errorf("narrowed tunnel does not parse: %v", err)
+	}
+
+	// No peer at the address: nothing to narrow to, the config stays whole.
+	for _, a := range []string{"10.200.0.200", "10.200.0.8"} {
+		if w, err := c.Narrow(netip.MustParseAddr(a)); err != nil || len(w.Peers) != 2 || string(w.Tunnel) != string(c.Tunnel) {
+			t.Errorf("Narrow(%s) = %d peers, %v", a, len(w.Peers), err)
 		}
 	}
 }

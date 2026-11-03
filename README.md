@@ -18,8 +18,9 @@ private key is made on the device and never in the config or binary.
 build/bin/keygen                      # once per device; prints the pubkey for mesh.yaml
 # in mesh.yaml: <name>-cli: { ip: ..., port: ..., pubkey: ..., client: true }; gen.py; reinstall peers
 make build NODE=<name>-cli CONFIG=<dir of mesh.yaml>
-export PATH=$PWD/build/bin:$PATH      # applet symlinks: status, keygen, ...
+export PATH=$PWD/build/bin:$PATH      # applet symlinks: nc, status, keygen, ...
 status -w 30s remote-01               # hosts table, live peer state
+ssh -o ProxyCommand='nc %h %p' remote-01   # OpenSSH over the mesh
 ```
 
 `make build NODE=...` copies `CONFIG/NODE/node.json` into

@@ -95,6 +95,52 @@ func ParseConfig(data []byte) (Config, error) {
 	return c, nil
 }
 
+// Narrow returns the config with only the peers at addrs, for a node that
+// serves one session. stunmesh-go's discovery cycle publishes to every
+// peer and then looks them up one by one, each a DHT round trip, so on a
+// full mesh a cold dial waits on peers it never talks to; narrowed, the
+// cycle is one publish and one lookup. An address that is no peer's, such
+// as an unnamed literal, narrows nothing: the config is returned whole.
+func (c Config) Narrow(addrs ...netip.Addr) (Config, error) {
+	keep := map[string]bool{}
+	for _, name := range c.Peers {
+		for _, a := range addrs {
+			if c.Hosts[name] == a {
+				keep[name] = true
+			}
+		}
+	}
+	if len(keep) < len(addrs) {
+		return c, nil
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(c.Tunnel, &doc); err != nil {
+		return Config{}, fmt.Errorf("node config: %w", err)
+	}
+	all, _ := doc["peers"].([]any)
+	var peers []any
+	for _, p := range all {
+		m, _ := p.(map[string]any)
+		if name, _ := m["name"].(string); keep[strings.ToLower(name)] {
+			peers = append(peers, p)
+		}
+	}
+	doc["peers"] = peers
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return Config{}, err
+	}
+	n := c
+	n.Tunnel = b
+	n.Peers = make(map[[32]byte]string, len(keep))
+	for k, name := range c.Peers {
+		if keep[name] {
+			n.Peers[k] = name
+		}
+	}
+	return n, nil
+}
+
 // Lookup resolves a mesh host from the hosts table only: a node name, the
 // same with the mesh domain, or an address literal inside the mesh subnet.
 // Names match without regard to case, as DNS names do.
