@@ -1,6 +1,6 @@
 # stunmesh-cli
 
-One static binary that joins a [stunmesh-go](https://github.com/tjjh89017/stunmesh-go)
+One static binary, `sm`, that joins a [stunmesh-go](https://github.com/tjjh89017/stunmesh-go)
 WireGuard mesh in userspace, without a VPN, a tun device or root, and opens
 SSH and Mosh sessions to the mesh's hosts. Meant for phones and other
 machines where a system VPN is unavailable or already taken.
@@ -15,21 +15,25 @@ private key is made on the device and never in the config or binary.
 ## Use
 
 ```sh
-build/bin/keygen                      # once per device; prints the pubkey for mesh.yaml
+sm keygen                             # once per device; prints the pubkey for mesh.yaml
 # in mesh.yaml: <name>-cli: { ip: ..., port: ..., pubkey: ..., client: true }; gen.py; reinstall peers
-make build NODE=<name>-cli CONFIG=<dir of mesh.yaml>
-export PATH=$PWD/build/bin:$PATH      # applet symlinks: ssh, mosh, nc, listen, status, keygen
-status -w 30s remote-01               # hosts table, live peer state
-ssh -o ProxyCommand='nc %h %p' remote-01   # OpenSSH over the mesh
-ssh remote-01 -- uname -a             # or the ssh applet, no system ssh needed
-mosh remote-02                      # Mosh over the node; Ctrl-^ . quits (mosh-server on the host)
-ssh -N -L 8080:127.0.0.1:80 -R 2222:127.0.0.1:22 remote-01   # forwards both ways
-listen 22:127.0.0.1:22               # every mesh peer reaches this device's sshd at its mesh address;
+make build NODE=<name>-cli CONFIG=<dir of mesh.yaml>   # build/sm-<name>-cli-<arch>, build/bin/sm
+export PATH=$PWD/build/bin:$PATH
+sm status -w 30s remote-01            # hosts table, live peer state
+sm ssh remote-01 -- uname -a          # SSH over the node, no system ssh needed
+sm mosh remote-02                   # Mosh over the node; Ctrl-^ . quits (mosh-server on the host)
+sm ssh -N -L 8080:127.0.0.1:80 -R 2222:127.0.0.1:22 remote-01   # forwards both ways
+sm listen 22:127.0.0.1:22             # every mesh peer reaches this device's sshd at its mesh address;
                                       # the target can be any host this device reaches
+ssh -o ProxyCommand='sm nc %h %p' remote-01   # the system's OpenSSH over the node
 ```
 
+build/bin/ also has a symlink per applet (ssh, mosh, nc, listen, status,
+keygen), so with it first in PATH plain `ssh` and `mosh` are the applets.
+The device key stays in `~/.config/stunmesh-cli/key`.
+
 `make build NODE=...` copies `CONFIG/NODE/node.json` into
-`cmd/stunmesh-cli/config/`, which git ignores, so the repo carries no site
+`cmd/sm/config/`, which git ignores, so the repo carries no site
 config. Names resolve from the compiled-in table only, never DNS.
 `STUNMESH_CLI_LOG=info` shows the node's log on stderr.
 
@@ -52,7 +56,7 @@ replaces three modules with checkouts next to this one:
 | sshd-lite | `../sshd-lite` | `mosh-connect` |
 
 ```sh
-make check    # vet, test, build build/stunmesh-cli-<arch>
+make check    # vet, test, build build/sm-<arch>
 ```
 
 Plain `go` commands need `-tags mobile`, which selects stunmesh-go's

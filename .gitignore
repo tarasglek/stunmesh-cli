@@ -1,2 +1,2 @@
 build/
-cmd/stunmesh-cli/config/*.json
+cmd/sm/config/*.json

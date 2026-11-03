@@ -16,7 +16,7 @@ import (
 const dialTimeout = 30 * time.Second
 
 // nc connects stdin and stdout to a TCP port on a mesh host, for ssh
-// -o ProxyCommand='stunmesh-cli nc %h %p', scp, rsync and the like.
+// -o ProxyCommand='sm nc %h %p', scp, rsync and the like.
 func nc(args []string, p proc) int {
 	if len(args) != 2 {
 		fmt.Fprintf(p.err, "usage: %s nc host port\n", self)

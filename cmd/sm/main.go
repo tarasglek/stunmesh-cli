@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-// Command stunmesh-cli is a multi-call binary, like busybox: the applet is
-// the basename it runs as (a symlink named ssh runs the ssh applet), else
-// its first argument when run as stunmesh-cli or stunmesh-cli-*.
+// Command sm is stunmesh-cli's multi-call binary, like busybox: the applet
+// is the basename it runs as (a symlink named ssh runs the ssh applet),
+// else its first argument when run as sm or sm-*: sm ssh, sm mosh.
 package main
 
 import (
@@ -22,7 +22,7 @@ import (
 // version is stamped by the Makefile.
 var version = "dev"
 
-const self = "stunmesh-cli"
+const self = "sm"
 
 // proc is what an applet may touch of the process, so tests can run one
 // without it.
@@ -61,8 +61,8 @@ func pick(argv []string) (string, []string) {
 	if len(argv) == 0 {
 		return "", nil
 	}
-	// Build artifacts are named stunmesh-cli-<node>-<arch>; they are still
-	// the binary itself, not an applet.
+	// Build artifacts are named sm-<node>-<arch>; they are still the
+	// binary itself, not an applet.
 	if name := filepath.Base(argv[0]); name != self && !strings.HasPrefix(name, self+"-") {
 		return name, argv[1:]
 	}

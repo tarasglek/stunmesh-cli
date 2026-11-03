@@ -5,7 +5,7 @@
 #   make build NODE=desk-cli CONFIG=~/mesh   # CONFIG: the dir of mesh.yaml
 #
 # compiles in CONFIG/NODE/node.json, as gen.py renders it, and builds
-# build/stunmesh-cli-NODE-ARCH; without NODE the binary has no node config.
+# build/sm-NODE-ARCH; without NODE the binary has no node config.
 # build/bin/ gets a symlink per applet, so PATH=build/bin:$PATH makes
 # ssh, nc, ... the applets. Nothing is installed outside build/.
 VERSION ?= $(shell git describe --tags --always --dirty)
@@ -17,8 +17,8 @@ NODE ?=
 CONFIG ?=
 
 BUILD := build
-EMBED := cmd/stunmesh-cli/config/node.json
-BIN := $(BUILD)/stunmesh-cli-$(if $(NODE),$(NODE)-)$(GOARCH)
+EMBED := cmd/sm/config/node.json
+BIN := $(BUILD)/sm-$(if $(NODE),$(NODE)-)$(GOARCH)
 
 export CGO_ENABLED := 0
 export GOTOOLCHAIN := go$(GO_VERSION)
@@ -41,10 +41,10 @@ ifneq ($(NODE),)
 else
 	rm -f $(EMBED)
 endif
-	GOOS=linux GOARCH=$(GOARCH) go build -tags '$(TAGS)' -trimpath -ldflags '-s -w -X main.version=$(VERSION)' -o $@ ./cmd/stunmesh-cli
+	GOOS=linux GOARCH=$(GOARCH) go build -tags '$(TAGS)' -trimpath -ldflags '-s -w -X main.version=$(VERSION)' -o $@ ./cmd/sm
 ifeq ($(GOARCH),$(GOHOSTARCH))
 	rm -rf $(BUILD)/bin && mkdir -p $(BUILD)/bin
-	for a in stunmesh-cli $$($@ --list); do ln -s ../$(notdir $@) $(BUILD)/bin/$$a; done
+	for a in sm $$($@ --list); do ln -s ../$(notdir $@) $(BUILD)/bin/$$a; done
 endif
 
 check: tidy vet test build

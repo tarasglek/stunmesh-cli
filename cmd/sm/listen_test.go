@@ -22,10 +22,10 @@ func TestParseListen(t *testing.T) {
 
 func TestListenRejects(t *testing.T) {
 	env := map[string]string{"config": testConfig, "STUNMESH_CLI_KEY": t.TempDir() + "/key"}
-	if code, _, errs := runEnv(env, "stunmesh-cli", "listen"); code != 2 || !strings.Contains(errs, "usage") {
+	if code, _, errs := runEnv(env, "sm", "listen"); code != 2 || !strings.Contains(errs, "usage") {
 		t.Errorf("listen: %d %q", code, errs)
 	}
-	if code, _, errs := runEnv(env, "stunmesh-cli", "listen", "22:127.0.0.1:22"); code != 1 || !strings.Contains(errs, "keygen") {
+	if code, _, errs := runEnv(env, "sm", "listen", "22:127.0.0.1:22"); code != 1 || !strings.Contains(errs, "keygen") {
 		t.Errorf("listen without a key: %d %q", code, errs)
 	}
 }

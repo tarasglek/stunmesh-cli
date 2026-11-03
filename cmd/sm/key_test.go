@@ -36,7 +36,7 @@ func TestKeygen(t *testing.T) {
 	env := map[string]string{"XDG_CONFIG_HOME": dir}
 	path := filepath.Join(dir, "stunmesh-cli", "key")
 
-	code, pub, errs := runEnv(env, "stunmesh-cli", "keygen")
+	code, pub, errs := runEnv(env, "sm", "keygen")
 	if code != 0 || !strings.Contains(errs, "wrote "+path) {
 		t.Fatalf("keygen: %d %q %q", code, pub, errs)
 	}
@@ -59,7 +59,7 @@ func TestKeygen(t *testing.T) {
 	}
 
 	before, _ := os.ReadFile(path)
-	code, again, errs := runEnv(env, "stunmesh-cli", "keygen")
+	code, again, errs := runEnv(env, "sm", "keygen")
 	after, _ := os.ReadFile(path)
 	if code != 0 || again != pub || string(before) != string(after) || !strings.Contains(errs, "exists") {
 		t.Errorf("second keygen: %d %q %q, file changed %v", code, again, errs, string(before) != string(after))

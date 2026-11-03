@@ -13,6 +13,10 @@ import (
 	"github.com/tarasglek/stunmesh-cli/mesh"
 )
 
+// keyDir is the key's directory under the config directory. It keeps
+// the project's name, not the command's, so a key outlives a rename.
+const keyDir = "stunmesh-cli"
+
 // keyPath is where this device's private key lives: $STUNMESH_CLI_KEY, or
 // stunmesh-cli/key under $XDG_CONFIG_HOME, or under ~/.config.
 func keyPath(getenv func(string) string) (string, error) {
@@ -27,7 +31,7 @@ func keyPath(getenv func(string) string) (string, error) {
 		}
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, self, "key"), nil
+	return filepath.Join(dir, keyDir, "key"), nil
 }
 
 // readKey loads the key, refusing it, as ssh refuses a private key, when

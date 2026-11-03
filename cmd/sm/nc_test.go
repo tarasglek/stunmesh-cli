@@ -51,9 +51,9 @@ func TestNcRejects(t *testing.T) {
 		{[]string{"nc", "remote-01", "ssh"}, 1, `bad port "ssh"`},
 		{[]string{"nc", "remote-01", "0"}, 1, "bad port"},
 		{[]string{"nc", "nosuch", "22"}, 1, `unknown host "nosuch": not in the compiled-in hosts table`},
-		{[]string{"nc", "remote-01", "22"}, 1, "run stunmesh-cli keygen"},
+		{[]string{"nc", "remote-01", "22"}, 1, "run sm keygen"},
 	} {
-		code, _, errs := runEnv(env, append([]string{"stunmesh-cli"}, tc.args...)...)
+		code, _, errs := runEnv(env, append([]string{"sm"}, tc.args...)...)
 		if code != tc.code || !strings.Contains(errs, tc.err) {
 			t.Errorf("%v: %d %q, want %d and %q", tc.args, code, errs, tc.code, tc.err)
 		}

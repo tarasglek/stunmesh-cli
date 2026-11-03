@@ -18,10 +18,12 @@ func TestPick(t *testing.T) {
 		args []string
 	}{
 		{[]string{"/x/build/bin/ssh", "desk"}, "ssh", []string{"desk"}},
-		{[]string{"stunmesh-cli", "ssh", "desk"}, "ssh", []string{"desk"}},
-		{[]string{"./build/stunmesh-cli", "nc", "desk", "22"}, "nc", []string{"desk", "22"}},
-		{[]string{"build/stunmesh-cli-desk-cli-amd64", "status"}, "status", nil},
-		{[]string{"stunmesh-cli"}, "", nil},
+		{[]string{"sm", "ssh", "desk"}, "ssh", []string{"desk"}},
+		{[]string{"./build/sm", "nc", "desk", "22"}, "nc", []string{"desk", "22"}},
+		{[]string{"build/sm-desk-cli-amd64", "status"}, "status", nil},
+		{[]string{"sm"}, "", nil},
+		{[]string{"/usr/bin/stunmesh-cli", "ssh"}, "stunmesh-cli", []string{"ssh"}}, // not our name any more
+		{[]string{"smash", "x"}, "smash", []string{"x"}},                            // a prefix of sm- only
 		{nil, "", nil},
 	} {
 		name, args := pick(tc.argv)
@@ -56,16 +58,16 @@ func runEnv(env map[string]string, argv ...string) (int, string, string) {
 func runCapture(argv ...string) (int, string, string) { return runEnv(nil, argv...) }
 
 func TestRun(t *testing.T) {
-	if code, out, _ := runCapture("stunmesh-cli", "--list"); code != 0 || out != "keygen\nlisten\nmosh\nnc\nssh\nstatus\n" {
+	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "keygen\nlisten\nmosh\nnc\nssh\nstatus\n" {
 		t.Errorf("--list: %d %q", code, out)
 	}
-	if code, out, _ := runCapture("stunmesh-cli", "--version"); code != 0 || !strings.HasPrefix(out, "stunmesh-cli ") {
+	if code, out, _ := runCapture("sm", "--version"); code != 0 || !strings.HasPrefix(out, "sm ") {
 		t.Errorf("--version: %d %q", code, out)
 	}
-	if code, _, errs := runCapture("stunmesh-cli", "nosuch"); code != 127 || !strings.Contains(errs, `unknown applet "nosuch"`) {
+	if code, _, errs := runCapture("sm", "nosuch"); code != 127 || !strings.Contains(errs, `unknown applet "nosuch"`) {
 		t.Errorf("unknown applet: %d %q", code, errs)
 	}
-	if code, _, errs := runCapture("stunmesh-cli"); code != 127 || !strings.Contains(errs, "usage:") {
+	if code, _, errs := runCapture("sm"); code != 127 || !strings.Contains(errs, "usage:") {
 		t.Errorf("no applet: %d %q", code, errs)
 	}
 }

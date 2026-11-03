@@ -68,7 +68,7 @@ func TestMoshRejects(t *testing.T) {
 		{[]string{"mosh", "-N", "remote-01"}, 2, "no -L, -R or -N"},
 		{[]string{"mosh", "remote-01"}, 1, "stdin is not a terminal"},
 	} {
-		code, _, errs := runEnv(env, append([]string{"stunmesh-cli"}, tc.args...)...)
+		code, _, errs := runEnv(env, append([]string{"sm"}, tc.args...)...)
 		if code != tc.code || !strings.Contains(errs, tc.err) {
 			t.Errorf("%v: %d %q, want %d and %q", tc.args, code, errs, tc.code, tc.err)
 		}

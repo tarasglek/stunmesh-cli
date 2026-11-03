@@ -49,7 +49,7 @@ func TestReadConfig(t *testing.T) {
 func TestStatusNoKey(t *testing.T) {
 	env := map[string]string{"config": testConfig, "STUNMESH_CLI_KEY": t.TempDir() + "/key"}
 	code, _, errs := runEnv(env, "status", "-w", "1s")
-	if code != 1 || !strings.Contains(errs, "run stunmesh-cli keygen") {
+	if code != 1 || !strings.Contains(errs, "run sm keygen") {
 		t.Errorf("status -w without a key: %d %q", code, errs)
 	}
 }
