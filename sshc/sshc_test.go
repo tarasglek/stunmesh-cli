@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -226,8 +227,13 @@ func TestAuthIdentities(t *testing.T) {
 	if err := os.WriteFile(plain, pemKey(t, k, ""), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := login(Auth{Defaults: []string{filepath.Join(dir, "nosuch"), enc, plain}}); err != nil {
+	var trace []string
+	logf := func(f string, a ...any) { trace = append(trace, fmt.Sprintf(f, a...)) }
+	if err := login(Auth{Defaults: []string{filepath.Join(dir, "nosuch"), enc, plain}, Logf: logf}); err != nil {
 		t.Errorf("defaults with a missing and an encrypted key before a usable one: %v", err)
+	}
+	if got := strings.Join(trace, "\n"); !strings.Contains(got, "identity "+enc+": skipped") || !strings.Contains(got, "identity "+plain+": ssh-ed25519 SHA256:") {
+		t.Errorf("Logf trace:\n%s", got)
 	}
 }
 

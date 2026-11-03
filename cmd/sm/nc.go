@@ -39,7 +39,7 @@ func nc(args []string, p proc) int {
 	if cfg, err = cfg.Narrow(addr); err != nil {
 		return fail(p, "nc", err)
 	}
-	m, err := startMesh(p, cfg)
+	m, err := startMesh(p, cfg, 0)
 	if err != nil {
 		return fail(p, "nc", err)
 	}

@@ -10,17 +10,15 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/jpillora/sshd-lite/mosh"
 	"github.com/tarasglek/stunmesh-cli/moshc"
-	"github.com/tarasglek/stunmesh-cli/sshc"
 	"golang.org/x/term"
 )
 
-const moshUsage = "usage: %s mosh [-i identity]... [-p port] [-l user] [user@]host [command...]\n"
+const moshUsage = "usage: %s mosh [-v] [-i identity]... [-p port] [-l user] [user@]host [command...]\n"
 
 // moshApplet runs a Mosh session to a mesh host through the userspace
 // node: mosh-server is started over SSH, then the session runs over UDP
@@ -49,13 +47,14 @@ func moshApplet(args []string, p proc) int {
 	if cfg, err = cfg.Narrow(addr); err != nil {
 		return fail(p, "mosh", err)
 	}
-	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
-	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr)
+	dbg := debugf(p, "mosh", a.verbose)
+	dbg("%s is %s in the hosts table; node narrowed to %d peer(s)", a.host, addr, len(cfg.Peers))
+	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr, dbg)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
 	defer closeAuth()
-	m, err := startMesh(p, cfg)
+	m, err := startMesh(p, cfg, a.verbose)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
@@ -66,23 +65,18 @@ func moshApplet(args []string, p proc) int {
 		cols, rows = 80, 24
 	}
 	termName := p.getenv("TERM")
-	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout+moshc.BootstrapTimeout)
-	conn, err := m.DialTCP(ctx, a.host, a.port)
+	c, err := dialSSH(p, m, a, clientCfg, dialTimeout, dbg)
 	if err != nil {
-		cancel()
-		return fail(p, "mosh", fmt.Errorf("%s: %w%s", hostport, err, logHint(p)))
-	}
-	c, err := sshc.Client(ctx, conn, hostport, clientCfg)
-	if err != nil {
-		cancel()
 		return fail(p, "mosh", err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), moshc.BootstrapTimeout)
 	port, key, err := moshc.Bootstrap(ctx, c, moshc.Server{Term: termName, Columns: cols, Rows: rows, Command: a.args})
 	c.Close() // the session needs no SSH from here on
 	cancel()
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
+	dbg("mosh-server is up on port %d; session over UDP through the mesh", port)
 	udp, err := m.DialUDP(a.host, port)
 	if err != nil {
 		return fail(p, "mosh", err)

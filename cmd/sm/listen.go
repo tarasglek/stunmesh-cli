@@ -66,7 +66,7 @@ func listen(args []string, p proc) int {
 	if err != nil {
 		return fail(p, "listen", err)
 	}
-	m, err := startMesh(p, cfg)
+	m, err := startMesh(p, cfg, 0)
 	if err != nil {
 		return fail(p, "listen", err)
 	}

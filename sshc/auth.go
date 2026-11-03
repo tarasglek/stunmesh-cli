@@ -28,6 +28,14 @@ type Auth struct {
 	// ~/.ssh/id_ed25519, are used when present.
 	Identities, Defaults []string
 	Prompt               Prompt
+	// Logf, if set, hears which keys are found and why any are skipped.
+	Logf func(format string, args ...any)
+}
+
+func (a Auth) logf(format string, args ...any) {
+	if a.Logf != nil {
+		a.Logf(format, args...)
+	}
 }
 
 // Methods builds the auth methods. Like ssh, it reads identity files and
@@ -46,7 +54,12 @@ func (a Auth) Methods() (methods []ssh.AuthMethod, close func(), err error) {
 		if conn, err := net.Dial("unix", a.AgentSock); err == nil {
 			close = func() { conn.Close() }
 			methods = append(methods, ssh.PublicKeysCallback(agent.NewClient(conn).Signers))
+			a.logf("agent %s: connected", a.AgentSock)
+		} else {
+			a.logf("agent: %v", err)
 		}
+	} else {
+		a.logf("agent: no SSH_AUTH_SOCK")
 	}
 	var once sync.Once
 	var signers []ssh.Signer
@@ -87,11 +100,13 @@ func (a Auth) loadFiles() ([]ssh.Signer, error) {
 			continue
 		}
 		if err != nil {
+			a.logf("identity %s: skipped: %v", f, err)
 			if first == nil {
 				first = err
 			}
 			continue
 		}
+		a.logf("identity %s: %s %s", f, s.PublicKey().Type(), ssh.FingerprintSHA256(s.PublicKey()))
 		signers = append(signers, s)
 	}
 	if len(signers) == 0 && first != nil {

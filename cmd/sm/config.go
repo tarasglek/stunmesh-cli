@@ -36,8 +36,9 @@ func nodeConfig(p proc) (mesh.Config, error) {
 }
 
 // startMesh brings this device's node up. $STUNMESH_CLI_LOG=debug, info,
-// warn or error shows its log at that level and above on stderr.
-func startMesh(p proc, cfg mesh.Config) (*mesh.Mesh, error) {
+// warn or error shows its log at that level and above on stderr; without
+// it, verbose 1 shows info and 2 or more debug, as ssh -v and -vv.
+func startMesh(p proc, cfg mesh.Config, verbose int) (*mesh.Mesh, error) {
 	path, err := keyPath(p.getenv)
 	if err != nil {
 		return nil, err
@@ -49,13 +50,17 @@ func startMesh(p proc, cfg mesh.Config) (*mesh.Mesh, error) {
 	if err != nil {
 		return nil, err
 	}
-	return mesh.Start(cfg, priv, logger(p))
+	return mesh.Start(cfg, priv, logger(p, verbose))
 }
 
 var logLevels = map[string]int{"debug": 0, "info": 1, "warn": 2, "error": 3}
 
-func logger(p proc) mesh.Logger {
-	min, ok := logLevels[strings.ToLower(p.getenv("STUNMESH_CLI_LOG"))]
+func logger(p proc, verbose int) mesh.Logger {
+	level := strings.ToLower(p.getenv("STUNMESH_CLI_LOG"))
+	if level == "" && verbose > 0 {
+		level = map[bool]string{true: "debug", false: "info"}[verbose > 1]
+	}
+	min, ok := logLevels[level]
 	if !ok {
 		return nil
 	}

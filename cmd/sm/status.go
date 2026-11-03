@@ -36,7 +36,7 @@ func status(args []string, p proc) int {
 	}
 	var peers []mesh.PeerStatus
 	if *wait > 0 {
-		m, err := startMesh(p, cfg)
+		m, err := startMesh(p, cfg, 0)
 		if err != nil {
 			return fail(p, "status", err)
 		}

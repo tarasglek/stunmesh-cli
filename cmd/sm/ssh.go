@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tarasglek/stunmesh-cli/mesh"
 	"github.com/tarasglek/stunmesh-cli/relay"
@@ -23,7 +24,7 @@ import (
 	"golang.org/x/term"
 )
 
-const sshUsage = "usage: %s ssh [-N] [-i identity]... [-L [bind:]port:host:hostport]... [-R [bind:]port:host:hostport]... [-p port] [-l user] [user@]host [command...]\n"
+const sshUsage = "usage: %s ssh [-v] [-N] [-i identity]... [-L [bind:]port:host:hostport]... [-R [bind:]port:host:hostport]... [-p port] [-l user] [user@]host [command...]\n"
 
 type sshArgs struct {
 	identities []string
@@ -34,6 +35,7 @@ type sshArgs struct {
 	command    string   // the command words joined, as ssh sends them
 	args       []string // the command words, for mosh-server to exec
 	noCommand  bool     // -N
+	verbose    int      // -v, -vv
 }
 
 // parseSSHArgs reads the OpenSSH options the applet supports, as
@@ -62,6 +64,10 @@ func parseSSHArgs(args []string, defaultUser string) (sshArgs, error) {
 		args = args[1:]
 		if opt == "-N" {
 			a.noCommand = true
+			continue
+		}
+		if strings.Trim(opt[1:], "v") == "" {
+			a.verbose += len(opt) - 1
 			continue
 		}
 		if len(opt) < 2 || !strings.Contains("iLRpl", opt[1:2]) {
@@ -147,26 +153,20 @@ func sshApplet(args []string, p proc) int {
 	if cfg, err = cfg.Narrow(want...); err != nil {
 		return failSSH(p, err)
 	}
-	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
-	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr)
+	dbg := debugf(p, "ssh", a.verbose)
+	dbg("%s is %s in the hosts table; node narrowed to %d peer(s)", a.host, addr, len(cfg.Peers))
+	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr, dbg)
 	if err != nil {
 		return failSSH(p, err)
 	}
 	defer closeAuth()
 
-	m, err := startMesh(p, cfg)
+	m, err := startMesh(p, cfg, a.verbose)
 	if err != nil {
 		return failSSH(p, err)
 	}
 	defer m.Stop()
-	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
-	conn, err := m.DialTCP(ctx, a.host, a.port)
-	if err != nil {
-		cancel()
-		return failSSH(p, fmt.Errorf("%s:%d: %w%s", a.host, a.port, err, logHint(p)))
-	}
-	c, err := sshc.Client(ctx, conn, hostport, clientCfg)
-	cancel()
+	c, err := dialSSH(p, m, a, clientCfg, dialTimeout, dbg)
 	if err != nil {
 		return failSSH(p, err)
 	}
@@ -263,7 +263,7 @@ func hostAliases(cfg mesh.Config, host string, port uint16) []string {
 // the host in a: the agent, -i identities, then the default ones, and
 // known_hosts, asking on the terminal, with the host key types known_hosts
 // has for the host at addr, under any of its mesh names, preferred.
-func sshClientConfig(p proc, a sshArgs, cfg mesh.Config, addr netip.Addr) (*ssh.ClientConfig, func(), error) {
+func sshClientConfig(p proc, a sshArgs, cfg mesh.Config, addr netip.Addr, dbg func(string, ...any)) (*ssh.ClientConfig, func(), error) {
 	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
 	remote := net.TCPAddrFromAddrPort(netip.AddrPortFrom(addr, a.port))
 	aliases := hostAliases(cfg, a.host, a.port)
@@ -276,7 +276,7 @@ func sshClientConfig(p proc, a sshArgs, cfg mesh.Config, addr netip.Addr) (*ssh.
 	for _, n := range []string{"id_ed25519", "id_ecdsa", "id_rsa"} {
 		defaults = append(defaults, filepath.Join(dir, n))
 	}
-	methods, closeAuth, err := sshc.Auth{AgentSock: p.getenv("SSH_AUTH_SOCK"), Identities: a.identities, Defaults: defaults, Prompt: p.prompt}.Methods()
+	methods, closeAuth, err := sshc.Auth{AgentSock: p.getenv("SSH_AUTH_SOCK"), Identities: a.identities, Defaults: defaults, Prompt: p.prompt, Logf: dbg}.Methods()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -299,7 +299,46 @@ func sshClientConfig(p proc, a sshArgs, cfg mesh.Config, addr netip.Addr) (*ssh.
 		closeAuth()
 		return nil, nil, err
 	}
-	return &ssh.ClientConfig{User: a.user, Auth: methods, HostKeyCallback: hk, HostKeyAlgorithms: algos}, closeAuth, nil
+	checked := func(host string, remote net.Addr, key ssh.PublicKey) error {
+		err := hk(host, remote, key)
+		dbg("server host key %s %s for %s: %s", key.Type(), ssh.FingerprintSHA256(key), host, map[bool]string{true: "known", false: fmt.Sprint(err)}[err == nil])
+		return err
+	}
+	if len(algos) > 0 {
+		dbg("host key types known for %s: %s first", hostport, algos[0])
+	}
+	return &ssh.ClientConfig{User: a.user, Auth: methods, HostKeyCallback: checked, HostKeyAlgorithms: algos}, closeAuth, nil
+}
+
+// dialSSH connects to the host in a through the node and logs in, within
+// timeout, tracing each step to dbg.
+func dialSSH(p proc, m *mesh.Mesh, a sshArgs, cfg *ssh.ClientConfig, timeout time.Duration, dbg func(string, ...any)) (*ssh.Client, error) {
+	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	start := p.now()
+	dbg("connecting to %s through the mesh", hostport)
+	conn, err := m.DialTCP(ctx, a.host, a.port)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w%s", hostport, err, logHint(p))
+	}
+	dbg("connected in %v", p.now().Sub(start).Round(time.Millisecond))
+	c, err := sshc.Client(ctx, conn, hostport, cfg)
+	if err != nil {
+		return nil, err
+	}
+	dbg("authenticated as %s in %v", a.user, p.now().Sub(start).Round(time.Millisecond))
+	return c, nil
+}
+
+// debugf is the applet's -v trace, ssh's debug1 lines; a no-op without -v.
+func debugf(p proc, applet string, verbose int) func(string, ...any) {
+	if verbose == 0 {
+		return func(string, ...any) {}
+	}
+	return func(format string, args ...any) {
+		fmt.Fprintf(p.err, "%s %s: debug1: %s\n", self, applet, fmt.Sprintf(format, args...))
+	}
 }
 
 // runSession runs command, or a shell when it is empty, and returns its

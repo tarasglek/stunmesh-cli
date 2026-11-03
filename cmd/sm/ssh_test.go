@@ -47,13 +47,15 @@ func TestParseSSHArgs(t *testing.T) {
 		{[]string{"-N", "-L", "8080:127.0.0.1:80", "-R2222:127.0.0.1:22", "h"},
 			sshArgs{port: 22, user: "me", host: "h", noCommand: true, local: []sshc.Forward{fwd("8080:127.0.0.1:80")}, remote: []sshc.Forward{fwd("2222:127.0.0.1:22")}}},
 		{[]string{"--", "h", "ls"}, sshArgs{port: 22, user: "me", host: "h", command: "ls", args: []string{"ls"}}},
+		{[]string{"-v", "h"}, sshArgs{port: 22, user: "me", host: "h", verbose: 1}},
+		{[]string{"-vv", "-v", "h"}, sshArgs{port: 22, user: "me", host: "h", verbose: 3}},
 	} {
 		got, err := parseSSHArgs(tc.args, "me")
 		if err != nil || !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("parseSSHArgs(%q) = %+v, %v\nwant %+v", tc.args, got, err, tc.want)
 		}
 	}
-	for _, args := range [][]string{nil, {"-p"}, {"-p", "x", "h"}, {"-p", "0", "h"}, {"-X", "h"}, {"-L", "bad", "h"},
+	for _, args := range [][]string{nil, {"-p"}, {"-vx", "h"}, {"-p", "x", "h"}, {"-p", "0", "h"}, {"-X", "h"}, {"-L", "bad", "h"},
 		{"-N", "h", "ls"}, {"@h"}, {"u@"}} {
 		if a, err := parseSSHArgs(args, "me"); err == nil {
 			t.Errorf("parseSSHArgs(%q) = %+v, want error", args, a)
@@ -222,6 +224,30 @@ func TestHostAliases(t *testing.T) {
 	} {
 		if got := hostAliases(cfg, host, 22); !slices.Equal(got, want) {
 			t.Errorf("hostAliases(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+// -v traces each step to stderr, and the node's log at info; without it
+// both are silent. Here the run stops at the missing mesh key, after the
+// lookup and the keys were traced.
+func TestSSHVerbose(t *testing.T) {
+	home := t.TempDir()
+	env := map[string]string{"config": testConfig, "HOME": home, "USER": "me", "STUNMESH_CLI_KEY": t.TempDir() + "/key"}
+	_, _, quiet := runEnv(env, "sm", "ssh", "remote-01")
+	if strings.Contains(quiet, "debug1") {
+		t.Errorf("trace without -v: %q", quiet)
+	}
+	_, _, errs := runEnv(env, "sm", "ssh", "-v", "remote-01")
+	for _, want := range []string{"sm ssh: debug1: remote-01 is 10.200.0.5 in the hosts table; node narrowed to 1 peer(s)", "agent: no SSH_AUTH_SOCK", "run sm keygen"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("-v output lacks %q:\n%s", want, errs)
+		}
+	}
+	p := testProc(map[string]string{}, &bytes.Buffer{}, &bytes.Buffer{})
+	for v, want := range map[int]bool{0: false, 1: true} {
+		if got := logger(p, v) != nil; got != want {
+			t.Errorf("logger at -v x%d: %v", v, got)
 		}
 	}
 }
