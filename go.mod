@@ -12,9 +12,11 @@ replace (
 )
 
 require (
+	github.com/jpillora/sshd-lite v0.0.0-00010101000000-000000000000
 	github.com/tarasglek/stunmesh-avahi v0.0.0-00010101000000-000000000000
 	github.com/tjjh89017/stunmesh-go v1.16.0
 	golang.org/x/crypto v0.58.0
+	golang.org/x/term v0.47.0
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
 )
 
@@ -34,7 +36,6 @@ require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/wire v0.7.0 // indirect
-	github.com/jpillora/sshd-lite v0.0.0-00010101000000-000000000000
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect

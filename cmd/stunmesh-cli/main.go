@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/tarasglek/stunmesh-cli/sshc"
 )
 
 // version is stamped by the Makefile.
@@ -33,6 +35,8 @@ type proc struct {
 	config func() ([]byte, error)
 	now    func() time.Time
 	sleep  func(time.Duration)
+	// prompt asks the user on the terminal; nil when there is none.
+	prompt sshc.Prompt
 }
 
 type applet func(args []string, p proc) int
@@ -40,6 +44,7 @@ type applet func(args []string, p proc) int
 var applets = map[string]applet{
 	"keygen": keygen,
 	"nc":     nc,
+	"ssh":    sshApplet,
 	"status": status,
 }
 
@@ -92,6 +97,6 @@ func main() {
 	os.Exit(run(os.Args, proc{
 		in: os.Stdin, out: os.Stdout, err: os.Stderr,
 		getenv: os.Getenv, rand: rand.Reader, config: embeddedConfig,
-		now: time.Now, sleep: time.Sleep,
+		now: time.Now, sleep: time.Sleep, prompt: ttyPrompt,
 	}))
 }

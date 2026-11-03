@@ -1,0 +1,366 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+
+	"github.com/tarasglek/stunmesh-cli/mesh"
+	"github.com/tarasglek/stunmesh-cli/sshc"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
+)
+
+const sshUsage = "usage: %s ssh [-N] [-i identity]... [-L [bind:]port:host:hostport]... [-R [bind:]port:host:hostport]... [-p port] [-l user] [user@]host [command...]\n"
+
+type sshArgs struct {
+	identities []string
+	local      []sshc.Forward
+	remote     []sshc.Forward
+	port       uint16
+	user, host string
+	command    string
+	noCommand  bool // -N
+}
+
+// parseSSHArgs reads the OpenSSH options the applet supports, as
+// "-L spec" or "-Lspec". As in ssh, options may come before or after the
+// destination, and "--" or the first word after the destination starts
+// the command, joined with spaces as ssh joins it.
+func parseSSHArgs(args []string, defaultUser string) (sshArgs, error) {
+	a := sshArgs{port: 22, user: defaultUser}
+	userSet, dest := false, ""
+	for len(args) > 0 {
+		opt := args[0]
+		if opt == "--" {
+			args = args[1:]
+			if dest == "" && len(args) > 0 {
+				dest, args = args[0], args[1:]
+			}
+			break
+		}
+		if !strings.HasPrefix(opt, "-") || opt == "-" {
+			if dest != "" {
+				break
+			}
+			dest, args = opt, args[1:]
+			continue
+		}
+		args = args[1:]
+		if opt == "-N" {
+			a.noCommand = true
+			continue
+		}
+		if len(opt) < 2 || !strings.Contains("iLRpl", opt[1:2]) {
+			return a, fmt.Errorf("unsupported option %s", opt)
+		}
+		val := opt[2:]
+		if val == "" {
+			if len(args) == 0 {
+				return a, fmt.Errorf("option %s needs a value", opt)
+			}
+			val, args = args[0], args[1:]
+		}
+		var err error
+		switch opt[1] {
+		case 'i':
+			a.identities = append(a.identities, val)
+		case 'L', 'R':
+			var f sshc.Forward
+			if f, err = sshc.ParseForward(val); err != nil {
+				return a, err
+			}
+			if opt[1] == 'L' {
+				a.local = append(a.local, f)
+			} else {
+				a.remote = append(a.remote, f)
+			}
+		case 'p':
+			n, perr := strconv.ParseUint(val, 10, 16)
+			if perr != nil || n == 0 {
+				return a, fmt.Errorf("bad port %q", val)
+			}
+			a.port = uint16(n)
+		case 'l':
+			a.user, userSet = val, true
+		}
+	}
+	if dest == "" {
+		return a, errors.New("no destination")
+	}
+	a.host = dest
+	if u, h, ok := strings.Cut(dest, "@"); ok {
+		if !userSet {
+			a.user = u
+		}
+		a.host = h
+	}
+	if a.host == "" || a.user == "" {
+		return a, errors.New("no host or user")
+	}
+	a.command = strings.Join(args, " ")
+	if a.noCommand && a.command != "" {
+		return a, errors.New("-N takes no command")
+	}
+	return a, nil
+}
+
+// sshApplet logs in to a mesh host over the userspace node: a shell, a
+// command, or with -N only the forwards.
+func sshApplet(args []string, p proc) int {
+	a, err := parseSSHArgs(args, p.getenv("USER"))
+	if err != nil {
+		fmt.Fprintf(p.err, "%s ssh: %v\n"+sshUsage, self, err, self)
+		return 255
+	}
+	cfg, err := nodeConfig(p)
+	if err != nil {
+		return failSSH(p, err)
+	}
+	addr, err := cfg.Lookup(a.host)
+	if err != nil {
+		return failSSH(p, err)
+	}
+	// The forwards' local targets may be mesh hosts too: keep their peers.
+	want := []netip.Addr{addr}
+	for _, f := range a.remote {
+		if fa, err := cfg.Lookup(f.Host); err == nil {
+			want = append(want, fa)
+		}
+	}
+	if cfg, err = cfg.Narrow(want...); err != nil {
+		return failSSH(p, err)
+	}
+	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
+	clientCfg, closeAuth, err := sshClientConfig(p, a.user, hostport, net.TCPAddrFromAddrPort(netip.AddrPortFrom(addr, a.port)))
+	if err != nil {
+		return failSSH(p, err)
+	}
+	defer closeAuth()
+
+	m, err := startMesh(p, cfg)
+	if err != nil {
+		return failSSH(p, err)
+	}
+	defer m.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+	conn, err := m.DialTCP(ctx, a.host, a.port)
+	if err != nil {
+		cancel()
+		return failSSH(p, fmt.Errorf("%s:%d: %w%s", a.host, a.port, err, logHint(p)))
+	}
+	c, err := sshc.Client(ctx, conn, hostport, clientCfg)
+	cancel()
+	if err != nil {
+		return failSSH(p, err)
+	}
+	defer c.Close()
+
+	logf := func(format string, args ...any) { fmt.Fprintf(p.err, self+" ssh: "+format+"\n", args...) }
+	for _, f := range a.local {
+		lns, err := sshc.ListenLocal(f, logf)
+		if err != nil {
+			return failSSH(p, fmt.Errorf("-L %s: %w", f.ListenAddr(), err))
+		}
+		for _, ln := range lns {
+			defer ln.Close()
+			go func() { _ = sshc.Serve(ln, func() (net.Conn, error) { return c.Dial("tcp", f.Target()) }, logf) }()
+		}
+	}
+	for _, f := range a.remote {
+		ln, err := sshc.ListenRemote(c, f)
+		if err != nil {
+			return failSSH(p, fmt.Errorf("-R %s: %w", f.ListenAddr(), err))
+		}
+		defer ln.Close()
+		go func() { _ = sshc.Serve(ln, localDialer(m, cfg, f), logf) }()
+	}
+	if a.noCommand {
+		return waitClient(c)
+	}
+	code, err := runSession(c, a.command, p)
+	if err != nil {
+		return failSSH(p, err)
+	}
+	return code
+}
+
+// localDialer dials an -R target from this side: a mesh host through the
+// node, anything else, such as localhost, directly.
+func localDialer(m *mesh.Mesh, cfg mesh.Config, f sshc.Forward) func() (net.Conn, error) {
+	if _, err := cfg.Lookup(f.Host); err == nil {
+		return func() (net.Conn, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+			defer cancel()
+			return m.DialTCP(ctx, f.Host, f.HostPort)
+		}
+	}
+	return func() (net.Conn, error) { return net.Dial("tcp", f.Target()) }
+}
+
+// waitClient holds -N's forwards until the connection ends or the user
+// interrupts.
+func waitClient(c *ssh.Client) int {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	done := make(chan struct{})
+	go func() { _ = c.Wait(); close(done) }()
+	select {
+	case <-done:
+		return 255
+	case <-sig:
+		return 0
+	}
+}
+
+// failSSH reports an error with ssh's exit status for one, 255.
+func failSSH(p proc, err error) int {
+	fail(p, "ssh", err)
+	return 255
+}
+
+// sshClientConfig is OpenSSH's defaults from ~/.ssh: the agent, the
+// default identities and known_hosts, asking on the terminal, with the
+// host key types known_hosts has for hostport, at remote, preferred.
+func sshClientConfig(p proc, user, hostport string, remote net.Addr) (*ssh.ClientConfig, func(), error) {
+	home := p.getenv("HOME")
+	if home == "" {
+		return nil, nil, errors.New("no HOME for ~/.ssh")
+	}
+	dir := filepath.Join(home, ".ssh")
+	var defaults []string
+	for _, n := range []string{"id_ed25519", "id_ecdsa", "id_rsa"} {
+		defaults = append(defaults, filepath.Join(dir, n))
+	}
+	methods, closeAuth, err := sshc.Auth{AgentSock: p.getenv("SSH_AUTH_SOCK"), Defaults: defaults, Prompt: p.prompt}.Methods()
+	if err != nil {
+		return nil, nil, err
+	}
+	var confirm func(string, ssh.PublicKey) bool
+	if p.prompt != nil {
+		confirm = func(host string, key ssh.PublicKey) bool {
+			ans, err := p.prompt(fmt.Sprintf("The authenticity of host '%s' can't be established.\n%s key fingerprint is %s.\nAre you sure you want to continue connecting (yes/no)? ",
+				host, key.Type(), ssh.FingerprintSHA256(key)), true)
+			return err == nil && strings.TrimSpace(ans) == "yes"
+		}
+	}
+	known := []string{filepath.Join(dir, "known_hosts")}
+	hk, err := sshc.HostKeys(known, confirm)
+	if err != nil {
+		closeAuth()
+		return nil, nil, err
+	}
+	algos, err := sshc.KnownAlgorithms(known, hostport, remote)
+	if err != nil {
+		closeAuth()
+		return nil, nil, err
+	}
+	return &ssh.ClientConfig{User: user, Auth: methods, HostKeyCallback: hk, HostKeyAlgorithms: algos}, closeAuth, nil
+}
+
+// runSession runs command, or a shell when it is empty, and returns its
+// exit status. A shell on a terminal gets a pty, raw mode and resizes.
+// Stdin is fed from a goroutine of ours, not Session.Stdin, whose copy
+// Wait would wait for: a shell that exits would hang until a key press.
+func runSession(c *ssh.Client, command string, p proc) (int, error) {
+	sess, err := c.NewSession()
+	if err != nil {
+		return 255, err
+	}
+	defer sess.Close()
+	sess.Stdout, sess.Stderr = p.out, p.err
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		return 255, err
+	}
+	in, isFile := p.in.(*os.File)
+	if command == "" && isFile && term.IsTerminal(int(in.Fd())) {
+		restore, err := startTerminal(sess, in, p.getenv("TERM"))
+		if err != nil {
+			return 255, err
+		}
+		defer restore()
+	}
+	go func() {
+		_, _ = io.Copy(stdin, p.in)
+		stdin.Close()
+	}()
+	if command == "" {
+		err = sess.Shell()
+	} else {
+		err = sess.Start(command)
+	}
+	if err != nil {
+		return 255, err
+	}
+	return exitStatus(sess.Wait())
+}
+
+// exitStatus maps Session.Wait's result to ssh's exit status: the remote
+// one, or 255 with an error of ours.
+func exitStatus(err error) (int, error) {
+	var exit *ssh.ExitError
+	var missing *ssh.ExitMissingError
+	switch {
+	case err == nil:
+		return 0, nil
+	case errors.As(err, &exit):
+		return exit.ExitStatus(), nil
+	case errors.As(err, &missing):
+		return 255, errors.New("remote command exited without status")
+	}
+	return 255, err
+}
+
+// requestPty asks for a pty of termName, xterm-256color by default.
+func requestPty(sess *ssh.Session, termName string, cols, rows int) error {
+	if termName == "" {
+		termName = "xterm-256color"
+	}
+	return sess.RequestPty(termName, rows, cols, ssh.TerminalModes{})
+}
+
+// startTerminal asks for a pty the size of in's terminal, puts it in raw
+// mode, and passes on resizes; restore undoes it. It sends no terminal
+// modes, where ssh sends the local tty's: servers' defaults are sane, but
+// remote programs expecting this tty's settings may differ.
+func startTerminal(sess *ssh.Session, in *os.File, termName string) (func(), error) {
+	fd := int(in.Fd())
+	cols, rows, err := term.GetSize(fd)
+	if err != nil {
+		cols, rows = 80, 24
+	}
+	if err := requestPty(sess, termName, cols, rows); err != nil {
+		return nil, err
+	}
+	state, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, err
+	}
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	go func() {
+		for range winch {
+			if c, r, err := term.GetSize(fd); err == nil {
+				_ = sess.WindowChange(r, c)
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(winch)
+		close(winch)
+		_ = term.Restore(fd, state)
+	}, nil
+}
