@@ -29,6 +29,9 @@ replaces three modules with checkouts next to this one:
 make check    # vet, test, build build/stunmesh-cli-<arch>
 ```
 
+Plain `go` commands need `-tags mobile`, which selects stunmesh-go's
+embeddable node; the Makefile passes it.
+
 ## License
 
 LGPL-3.0-or-later, as stunmesh-avahi.
