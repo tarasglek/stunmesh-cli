@@ -15,6 +15,11 @@ GOHOSTARCH := $(shell go env GOHOSTARCH)
 TAGS := mobile
 NODE ?=
 CONFIG ?=
+# SMALL=1 turns inlining off, about 9% smaller (arm64: 11.3 to 10.3 MB),
+# for devices where space counts more than CPU per packet. gsa shows the
+# rest is runtime, gvisor, crypto and net, all needed, plus pclntab.
+SMALL ?=
+GCFLAGS := $(if $(SMALL),-gcflags=all=-l)
 
 BUILD := build
 EMBED := cmd/sm/config/node.json
@@ -41,7 +46,7 @@ ifneq ($(NODE),)
 else
 	rm -f $(EMBED)
 endif
-	GOOS=linux GOARCH=$(GOARCH) go build -tags '$(TAGS)' -trimpath -ldflags '-s -w -X main.version=$(VERSION)' -o $@ ./cmd/sm
+	GOOS=linux GOARCH=$(GOARCH) go build -tags '$(TAGS)' -trimpath $(GCFLAGS) -ldflags '-s -w -X main.version=$(VERSION)' -o $@ ./cmd/sm
 ifeq ($(GOARCH),$(GOHOSTARCH))
 	rm -rf $(BUILD)/bin && mkdir -p $(BUILD)/bin
 	for a in sm $$($@ --list); do ln -s ../$(notdir $@) $(BUILD)/bin/$$a; done
