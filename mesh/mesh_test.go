@@ -5,8 +5,10 @@ package mesh
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tarasglek/stunmesh-avahi/wgdev"
+	"github.com/tarasglek/stunmesh-cli/relay"
 )
 
 // pairConfig is node i of a two-node mesh "pa"/"pb" with no plugins and
@@ -98,9 +101,15 @@ func TestMeshDialByName(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	ln, err := b.net.ListenTCPAddrPort(netip.MustParseAddrPort("10.99.0.2:22"))
+	ln, err := b.ListenTCP(22)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if ln.Addr().String() != "10.99.0.2:22" {
+		t.Errorf("listening on %v, want the tunnel address", ln.Addr())
+	}
+	if _, err := b.ListenTCP(22); err == nil {
+		t.Error("second listener on one port")
 	}
 	defer ln.Close()
 	go func() {
@@ -204,5 +213,62 @@ func TestTunnelJSON(t *testing.T) {
 	}
 	if doc.Interface.PrivateKey != FormatKey([32]byte{7}) || doc.Interface.ListenPort != 51820 || doc.Log.Level != "silent" || len(doc.Hosts) != 3 {
 		t.Errorf("tunnel = %s", s)
+	}
+}
+
+// The listen applet's path: a relay serving a mesh listener carries a
+// peer's connection to a local target, and ends when the listener closes,
+// whose Accept then reports net.ErrClosed rather than gonet's own error.
+func TestListenRelay(t *testing.T) {
+	a, b := startPair(t)
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	go func() {
+		for {
+			c, err := target.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				got, _ := io.ReadAll(c)
+				_, _ = c.Write(append([]byte("relayed "), got...))
+			}()
+		}
+	}()
+	ln, err := b.ListenTCP(22)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		relay.Serve(ln, func() (net.Conn, error) { return net.Dial("tcp", target.Addr().String()) }, t.Logf)
+		close(done)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := a.DialTCP(ctx, "pb", 22)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = c.Write([]byte("in"))
+	_ = c.(interface{ CloseWrite() error }).CloseWrite()
+	got, err := io.ReadAll(c)
+	c.Close()
+	if err != nil || string(got) != "relayed in" {
+		t.Fatalf("through the mesh listener: %q, %v", got, err)
+	}
+
+	ln.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("relay still serving a closed mesh listener")
+	}
+	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("Accept after Close = %v, want net.ErrClosed", err)
 	}
 }

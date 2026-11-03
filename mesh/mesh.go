@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/tarasglek/stunmesh-avahi/lease" // the client's peers use lease
 	"github.com/tarasglek/stunmesh-avahi/wgdev"
 	"github.com/tjjh89017/stunmesh-go/mobile"
 	"golang.zx2c4.com/wireguard/tun/netstack"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 )
 
 // Logger receives the node's log lines; level is debug, info, warn or
@@ -102,6 +104,39 @@ func (m *Mesh) DialUDP(host string, port uint16) (net.Conn, error) {
 		return nil, err
 	}
 	return m.net.DialUDPAddrPort(netip.AddrPort{}, netip.AddrPortFrom(a, port))
+}
+
+// ListenTCP listens on port of the node's tunnel address, for connections
+// from mesh peers. Nothing outside the mesh can reach it: the address
+// exists only inside this process's netstack.
+func (m *Mesh) ListenTCP(port uint16) (net.Listener, error) {
+	ln, err := m.net.ListenTCPAddrPort(netip.AddrPortFrom(m.cfg.Prefix.Addr(), port))
+	if err != nil {
+		return nil, err
+	}
+	return &meshListener{TCPListener: ln}, nil
+}
+
+// meshListener makes a netstack listener report its own close as
+// net.ErrClosed, as net.Listener's users expect: gonet's Accept after
+// Close fails with an opaque "endpoint is in invalid state" instead, which
+// a relay cannot tell from a transient error.
+type meshListener struct {
+	*gonet.TCPListener
+	closed atomic.Bool
+}
+
+func (l *meshListener) Close() error {
+	l.closed.Store(true)
+	return l.TCPListener.Close()
+}
+
+func (l *meshListener) Accept() (net.Conn, error) {
+	c, err := l.TCPListener.Accept()
+	if err != nil && l.closed.Load() {
+		return nil, &net.OpError{Op: "accept", Net: "tcp", Addr: l.Addr(), Err: net.ErrClosed}
+	}
+	return c, err
 }
 
 // PeerStatus is one peer as WireGuard sees it, named from the config.
