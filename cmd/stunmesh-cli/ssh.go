@@ -144,7 +144,8 @@ func sshApplet(args []string, p proc) int {
 		return failSSH(p, err)
 	}
 	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
-	clientCfg, closeAuth, err := sshClientConfig(p, a.user, hostport, net.TCPAddrFromAddrPort(netip.AddrPortFrom(addr, a.port)))
+	clientCfg, closeAuth, err := sshClientConfig(p, a.user, hostport, net.TCPAddrFromAddrPort(netip.AddrPortFrom(addr, a.port)),
+		hostAliases(cfg, a.host, a.port)...)
 	if err != nil {
 		return failSSH(p, err)
 	}
@@ -232,10 +233,34 @@ func failSSH(p proc, err error) int {
 	return 255
 }
 
+// hostAliases is the other names known_hosts may know a mesh host by: its
+// short name and its name in the mesh domain, whichever was not typed.
+func hostAliases(cfg mesh.Config, host string, port uint16) []string {
+	short := strings.ToLower(strings.TrimSuffix(host, "."))
+	if cfg.Domain != "" {
+		short = strings.TrimSuffix(short, "."+strings.ToLower(cfg.Domain))
+	}
+	if _, ok := cfg.Hosts[short]; !ok {
+		return nil // an address literal
+	}
+	names := []string{short}
+	if cfg.Domain != "" {
+		names = append(names, short+"."+cfg.Domain)
+	}
+	var out []string
+	for _, n := range names {
+		if n != host {
+			out = append(out, net.JoinHostPort(n, strconv.Itoa(int(port))))
+		}
+	}
+	return out
+}
+
 // sshClientConfig is OpenSSH's defaults from ~/.ssh: the agent, the
 // default identities and known_hosts, asking on the terminal, with the
-// host key types known_hosts has for hostport, at remote, preferred.
-func sshClientConfig(p proc, user, hostport string, remote net.Addr) (*ssh.ClientConfig, func(), error) {
+// host key types known_hosts has for hostport, at remote, or under one of
+// its aliases, preferred.
+func sshClientConfig(p proc, user, hostport string, remote net.Addr, aliases ...string) (*ssh.ClientConfig, func(), error) {
 	home := p.getenv("HOME")
 	if home == "" {
 		return nil, nil, errors.New("no HOME for ~/.ssh")
@@ -258,12 +283,12 @@ func sshClientConfig(p proc, user, hostport string, remote net.Addr) (*ssh.Clien
 		}
 	}
 	known := []string{filepath.Join(dir, "known_hosts")}
-	hk, err := sshc.HostKeys(known, confirm)
+	hk, err := sshc.HostKeys(known, confirm, aliases...)
 	if err != nil {
 		closeAuth()
 		return nil, nil, err
 	}
-	algos, err := sshc.KnownAlgorithms(known, hostport, remote)
+	algos, err := sshc.KnownAlgorithms(known, hostport, remote, aliases...)
 	if err != nil {
 		closeAuth()
 		return nil, nil, err

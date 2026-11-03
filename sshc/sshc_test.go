@@ -395,3 +395,36 @@ func TestKnownAlgorithms(t *testing.T) {
 		t.Errorf("rsa algorithms %v", rsa)
 	}
 }
+
+// A host known only by its full mesh name passes under its short name when
+// the full one is an alias, and a different key under the alias is a
+// changed key, not an unknown host.
+func TestHostKeysAliases(t *testing.T) {
+	_, us := newKey(t)
+	s := startServer(t, us.PublicKey())
+	cfg := func(hk ssh.HostKeyCallback) *ssh.ClientConfig {
+		return &ssh.ClientConfig{User: "u", Auth: []ssh.AuthMethod{ssh.PublicKeys(us)}, HostKeyCallback: hk}
+	}
+	fqdn := knownFile(t, "remote-01.mesh.internal:22", s.host)
+
+	hk, _ := HostKeys([]string{fqdn}, nil)
+	if _, err := dial(t, s, cfg(hk)); err == nil || !strings.Contains(err.Error(), "is not known") {
+		t.Errorf("short name without alias: %v", err)
+	}
+	hk, _ = HostKeys([]string{fqdn}, nil, "remote-01.mesh.internal:22")
+	if c, err := dial(t, s, cfg(hk)); err != nil {
+		t.Errorf("short name with the full one as alias: %v", err)
+	} else {
+		c.Close()
+	}
+	algos, err := KnownAlgorithms([]string{fqdn}, "remote-01:22", &net.TCPAddr{IP: net.IPv4(10, 230, 0, 5), Port: 22}, "remote-01.mesh.internal:22")
+	if err != nil || len(algos) == 0 || algos[0] != ssh.KeyAlgoED25519 {
+		t.Errorf("KnownAlgorithms via alias = %v, %v", algos, err)
+	}
+
+	_, other := newKey(t)
+	hk, _ = HostKeys([]string{knownFile(t, "remote-01.mesh.internal:22", other.PublicKey())}, func(string, ssh.PublicKey) bool { return true }, "remote-01.mesh.internal:22")
+	if _, err := dial(t, s, cfg(hk)); err == nil || !strings.Contains(err.Error(), "CHANGED") {
+		t.Errorf("other key under the alias: %v", err)
+	}
+}

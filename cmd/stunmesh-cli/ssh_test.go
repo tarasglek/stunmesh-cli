@@ -14,11 +14,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jpillora/sshd-lite/sshd"
+	"github.com/tarasglek/stunmesh-cli/mesh"
 	"github.com/tarasglek/stunmesh-cli/sshc"
 	"golang.org/x/crypto/ssh"
 )
@@ -203,5 +205,22 @@ func TestSSHBadKnownHosts(t *testing.T) {
 	code, _, errs := runEnv(env, "stunmesh-cli", "ssh", "remote-01")
 	if code != 255 || !strings.Contains(errs, "known_hosts") || strings.Contains(errs, "keygen") {
 		t.Errorf("known_hosts a directory: %d %q", code, errs)
+	}
+}
+
+func TestHostAliases(t *testing.T) {
+	cfg, err := mesh.ParseConfig([]byte(testConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for host, want := range map[string][]string{
+		"remote-01":               {"remote-01.mesh.internal:22"},
+		"remote-01.mesh.internal": {"remote-01:22"},
+		"Remote-01":               {"remote-01:22", "remote-01.mesh.internal:22"},
+		"10.200.0.5":              nil,
+	} {
+		if got := hostAliases(cfg, host, 22); !slices.Equal(got, want) {
+			t.Errorf("hostAliases(%q) = %v, want %v", host, got, want)
+		}
 	}
 }
