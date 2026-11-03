@@ -40,7 +40,7 @@ func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
 		if c, ok := env["config"]; ok {
 			return []byte(c), nil
 		}
-		return embeddedConfig()
+		return nil, errNoConfig
 	}
 	return proc{
 		in: strings.NewReader(""), out: out, err: errb,
@@ -58,7 +58,7 @@ func runEnv(env map[string]string, argv ...string) (int, string, string) {
 func runCapture(argv ...string) (int, string, string) { return runEnv(nil, argv...) }
 
 func TestRun(t *testing.T) {
-	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "keygen\nlisten\nmosh\nnc\nssh\nstatus\n" {
+	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "config\nkeygen\nlisten\nmosh\nnc\nssh\nstatus\n" {
 		t.Errorf("--list: %d %q", code, out)
 	}
 	if code, out, _ := runCapture("sm", "--version"); code != 0 || !strings.HasPrefix(out, "sm ") {

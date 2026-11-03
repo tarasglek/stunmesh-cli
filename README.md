@@ -9,8 +9,9 @@ WireGuard runs on wireguard-go's netstack inside the process; peer discovery
 is the standard stunmesh-go machinery with the lease plugin from
 [stunmesh-avahi](https://github.com/tarasglek/stunmesh-avahi).
 
-The node's public config and a static hosts table are compiled in; the
-private key is made on the device and never in the config or binary.
+Everything a node needs travels in its binary, attached as a zip: the
+public node config and a static hosts table. Only the private key is on
+the device, made there and never in the config or binary.
 
 ## Use
 
@@ -18,6 +19,7 @@ private key is made on the device and never in the config or binary.
 sm keygen                             # once per device; prints the pubkey for mesh.yaml
 # in mesh.yaml: <name>-cli: { ip: ..., port: ..., pubkey: ..., client: true }; gen.py; reinstall peers
 make build NODE=<name>-cli CONFIG=<dir of mesh.yaml>   # build/sm-<name>-cli-<arch>, build/bin/sm
+sm config attach build/sm-arm64 phone-cli/node.json sm-phone   # or attach one to any sm binary
 export PATH=$PWD/build/bin:$PATH
 sm status -w 30s remote-01            # hosts table, live peer state
 sm ssh remote-01 -- uname -a          # SSH over the node, no system ssh needed
@@ -32,9 +34,13 @@ build/bin/ also has a symlink per applet (ssh, mosh, nc, listen, status,
 keygen), so with it first in PATH plain `ssh` and `mosh` are the applets.
 The device key stays in `~/.config/stunmesh-cli/key`.
 
-`make build NODE=...` copies `CONFIG/NODE/node.json` into
-`cmd/sm/config/`, which git ignores, so the repo carries no site
-config. Names resolve from the compiled-in table only, never DNS.
+`make build NODE=...` builds the generic `build/sm-<arch>` and attaches
+`CONFIG/NODE/node.json` to a copy, so the repo carries no site config and
+one build serves every node of an architecture. The config is a stored
+zip entry at the end of the file: `sm config` or `unzip -p sm node.json`
+prints it. `sm --config FILE <applet>` or `$STUNMESH_CLI_CONFIG=FILE`
+reads one from the file system instead. Names resolve from that table
+only, never DNS.
 `STUNMESH_CLI_LOG=info` shows the node's log on stderr.
 
 mosh needs mosh-server on the host. As with mosh, mosh-server runs

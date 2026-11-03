@@ -4,8 +4,10 @@
 #
 #   make build NODE=desk-cli CONFIG=~/mesh   # CONFIG: the dir of mesh.yaml
 #
-# compiles in CONFIG/NODE/node.json, as gen.py renders it, and builds
-# build/sm-NODE-ARCH; without NODE the binary has no node config.
+# builds the generic build/sm-ARCH and from it build/sm-NODE-ARCH, the same
+# binary with CONFIG/NODE/node.json, as gen.py renders it, attached as a
+# zip (sm config attach; unzip -p reads it back). Without NODE, only the
+# generic binary, which takes its config from --config FILE.
 # build/bin/ gets a symlink per applet, so PATH=build/bin:$PATH makes
 # ssh, nc, ... the applets. Nothing is installed outside build/.
 VERSION ?= $(shell git describe --tags --always --dirty)
@@ -22,7 +24,7 @@ SMALL ?=
 GCFLAGS := $(if $(SMALL),-gcflags=all=-l)
 
 BUILD := build
-EMBED := cmd/sm/config/node.json
+BASE := $(BUILD)/sm-$(GOARCH)
 BIN := $(BUILD)/sm-$(if $(NODE),$(NODE)-)$(GOARCH)
 
 export CGO_ENABLED := 0
@@ -33,23 +35,25 @@ export GOAMD64 := v1
 export GOARM64 := v8.0
 
 .PHONY: build check test vet tidy clean FORCE
-build: $(BIN)
 
 # Always run go build: it is incremental itself, sees the replaced sibling
 # modules, and restamps the version after a commit that changes no source.
+$(BASE): FORCE
+	GOOS=linux GOARCH=$(GOARCH) go build -tags '$(TAGS)' -trimpath $(GCFLAGS) -ldflags '-s -w -X main.version=$(VERSION)' -o $@ ./cmd/sm
+
+# Attaching runs sm for this host, so it works for any GOARCH.
+ifneq ($(NODE),)
+$(BIN): $(BASE) FORCE
+	@test -n "$(CONFIG)" || { echo "NODE=$(NODE) needs CONFIG=<dir of mesh.yaml>" >&2; exit 1; }
+	GOARCH=$(GOHOSTARCH) go run -tags '$(TAGS)' ./cmd/sm config attach $(BASE) $(CONFIG)/$(NODE)/node.json $@
+endif
+
 # The applet links come from the binary's own --list, so only a binary for
 # this host gets them.
-$(BIN): FORCE
-ifneq ($(NODE),)
-	@test -n "$(CONFIG)" || { echo "NODE=$(NODE) needs CONFIG=<dir of mesh.yaml>" >&2; exit 1; }
-	cp $(CONFIG)/$(NODE)/node.json $(EMBED)
-else
-	rm -f $(EMBED)
-endif
-	GOOS=linux GOARCH=$(GOARCH) go build -tags '$(TAGS)' -trimpath $(GCFLAGS) -ldflags '-s -w -X main.version=$(VERSION)' -o $@ ./cmd/sm
+build: $(BIN)
 ifeq ($(GOARCH),$(GOHOSTARCH))
 	rm -rf $(BUILD)/bin && mkdir -p $(BUILD)/bin
-	for a in sm $$($@ --list); do ln -s ../$(notdir $@) $(BUILD)/bin/$$a; done
+	for a in sm $$($(BIN) --list); do ln -s ../$(notdir $(BIN)) $(BUILD)/bin/$$a; done
 endif
 
 check: tidy vet test build

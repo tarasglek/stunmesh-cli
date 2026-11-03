@@ -6,7 +6,6 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/tarasglek/stunmesh-avahi/wgdev"
@@ -32,17 +31,6 @@ func TestStatusOffline(t *testing.T) {
 	want := "HOST       ADDRESS\nlap1       10.200.0.2\nremote-01  10.200.0.5\ndesk-cli   10.200.0.8  this node\n"
 	if out != want {
 		t.Errorf("status:\n%s\nwant:\n%s", out, want)
-	}
-}
-
-// A binary built without NODE has config/ with only its README.
-func TestReadConfig(t *testing.T) {
-	if _, err := readConfig(fstest.MapFS{"config/README.md": {}}); err == nil || !strings.Contains(err.Error(), "no node config compiled in") {
-		t.Errorf("readConfig without node.json: %v", err)
-	}
-	b, err := readConfig(fstest.MapFS{"config/node.json": {Data: []byte(testConfig)}})
-	if err != nil || string(b) != testConfig {
-		t.Errorf("readConfig = %q, %v", b, err)
 	}
 }
 

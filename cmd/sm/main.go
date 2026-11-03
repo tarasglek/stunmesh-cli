@@ -42,6 +42,7 @@ type proc struct {
 type applet func(args []string, p proc) int
 
 var applets = map[string]applet{
+	"config": configApplet,
 	"keygen": keygen,
 	"listen": listen,
 	"mosh":   moshApplet,
@@ -74,6 +75,14 @@ func pick(argv []string) (string, []string) {
 
 func run(argv []string, p proc) int {
 	name, args := pick(argv)
+	if name == "--config" { // sm --config FILE <applet> ...
+		if len(args) < 2 {
+			fmt.Fprintf(p.err, "usage: %s --config FILE <applet> [args...]\n", self)
+			return 2
+		}
+		p.config = configSource(args[0], nil)
+		name, args = args[1], args[2:]
+	}
 	if name == "--version" {
 		fmt.Fprintln(p.out, self, version)
 		return 0
@@ -98,7 +107,7 @@ func run(argv []string, p proc) int {
 func main() {
 	os.Exit(run(os.Args, proc{
 		in: os.Stdin, out: os.Stdout, err: os.Stderr,
-		getenv: os.Getenv, rand: rand.Reader, config: embeddedConfig,
+		getenv: os.Getenv, rand: rand.Reader, config: configSource(os.Getenv("STUNMESH_CLI_CONFIG"), os.Executable),
 		now: time.Now, sleep: time.Sleep, prompt: ttyPrompt,
 	}))
 }

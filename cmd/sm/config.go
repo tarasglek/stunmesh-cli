@@ -3,7 +3,6 @@
 package main
 
 import (
-	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,21 +10,6 @@ import (
 
 	"github.com/tarasglek/stunmesh-cli/mesh"
 )
-
-// config/ holds node.json when make build NODE=... put one there.
-//
-//go:embed config
-var configFS embed.FS
-
-func embeddedConfig() ([]byte, error) { return readConfig(configFS) }
-
-func readConfig(fsys fs.FS) ([]byte, error) {
-	b, err := fs.ReadFile(fsys, "config/node.json")
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, errors.New("no node config compiled in; build with make build NODE=<node> CONFIG=<dir of mesh.yaml>")
-	}
-	return b, err
-}
 
 func nodeConfig(p proc) (mesh.Config, error) {
 	b, err := p.config()
