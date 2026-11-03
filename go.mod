@@ -10,3 +10,5 @@ replace (
 	github.com/tarasglek/stunmesh-avahi => ../stunmesh-avahi
 	github.com/tjjh89017/stunmesh-go => ../stunmesh-go
 )
+
+require golang.org/x/crypto v0.58.0

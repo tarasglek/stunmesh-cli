@@ -6,6 +6,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 	"io"
 	"maps"
@@ -20,16 +21,26 @@ var version = "dev"
 
 const self = "stunmesh-cli"
 
-// stdio is what an applet may touch of the process, so tests can run one
+// proc is what an applet may touch of the process, so tests can run one
 // without it.
-type stdio struct {
+type proc struct {
 	in       io.Reader
 	out, err io.Writer
+	getenv   func(string) string
+	rand     io.Reader
 }
 
-type applet func(args []string, std stdio) int
+type applet func(args []string, p proc) int
 
-var applets = map[string]applet{}
+var applets = map[string]applet{
+	"keygen": keygen,
+}
+
+// fail reports an applet's error the way every applet does.
+func fail(p proc, applet string, err error) int {
+	fmt.Fprintf(p.err, "%s %s: %v\n", self, applet, err)
+	return 1
+}
 
 // pick splits argv into the applet name and its arguments.
 func pick(argv []string) (string, []string) {
@@ -47,29 +58,29 @@ func pick(argv []string) (string, []string) {
 	return argv[1], argv[2:]
 }
 
-func run(argv []string, std stdio) int {
+func run(argv []string, p proc) int {
 	name, args := pick(argv)
 	if name == "--version" {
-		fmt.Fprintln(std.out, self, version)
+		fmt.Fprintln(p.out, self, version)
 		return 0
 	}
 	if name == "--list" {
 		for _, n := range slices.Sorted(maps.Keys(applets)) {
-			fmt.Fprintln(std.out, n)
+			fmt.Fprintln(p.out, n)
 		}
 		return 0
 	}
 	a, ok := applets[name]
 	if !ok { // 127, as busybox and the shell exit for a missing command
 		if name != "" {
-			fmt.Fprintf(std.err, "%s: unknown applet %q\n", self, name)
+			fmt.Fprintf(p.err, "%s: unknown applet %q\n", self, name)
 		}
-		fmt.Fprintf(std.err, "usage: %s <applet> [args...]; %s --list shows applets\n", self, self)
+		fmt.Fprintf(p.err, "usage: %s <applet> [args...]; %s --list shows applets\n", self, self)
 		return 127
 	}
-	return a(args, std)
+	return a(args, p)
 }
 
 func main() {
-	os.Exit(run(os.Args, stdio{os.Stdin, os.Stdout, os.Stderr}))
+	os.Exit(run(os.Args, proc{os.Stdin, os.Stdout, os.Stderr, os.Getenv, rand.Reader}))
 }

@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"slices"
 	"strings"
 	"testing"
@@ -29,15 +30,22 @@ func TestPick(t *testing.T) {
 	}
 }
 
-func runCapture(argv ...string) (int, string, string) {
+// testProc is a process with environment env and no stdin.
+func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
+	return proc{strings.NewReader(""), out, errb, func(k string) string { return env[k] }, rand.Reader}
+}
+
+func runEnv(env map[string]string, argv ...string) (int, string, string) {
 	var out, errb bytes.Buffer
-	code := run(argv, stdio{strings.NewReader(""), &out, &errb})
+	code := run(argv, testProc(env, &out, &errb))
 	return code, out.String(), errb.String()
 }
 
+func runCapture(argv ...string) (int, string, string) { return runEnv(nil, argv...) }
+
 func TestRun(t *testing.T) {
-	if code, out, _ := runCapture("stunmesh-cli", "--list"); code != 0 || out != "" {
-		t.Errorf("--list with no applets: %d %q", code, out)
+	if code, out, _ := runCapture("stunmesh-cli", "--list"); code != 0 || out != "keygen\n" {
+		t.Errorf("--list: %d %q", code, out)
 	}
 	if code, out, _ := runCapture("stunmesh-cli", "--version"); code != 0 || !strings.HasPrefix(out, "stunmesh-cli ") {
 		t.Errorf("--version: %d %q", code, out)
