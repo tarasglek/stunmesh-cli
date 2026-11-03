@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/tarasglek/stunmesh-cli/mesh"
+	"github.com/tarasglek/stunmesh-cli/relay"
 	"github.com/tarasglek/stunmesh-cli/sshc"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
@@ -175,7 +176,7 @@ func sshApplet(args []string, p proc) int {
 		}
 		for _, ln := range lns {
 			defer ln.Close()
-			go func() { _ = sshc.Serve(ln, func() (net.Conn, error) { return c.Dial("tcp", f.Target()) }, logf) }()
+			go func() { relay.Serve(ln, func() (net.Conn, error) { return c.Dial("tcp", f.Target()) }, logf) }()
 		}
 	}
 	for _, f := range a.remote {
@@ -184,7 +185,7 @@ func sshApplet(args []string, p proc) int {
 			return failSSH(p, fmt.Errorf("-R %s: %w", f.ListenAddr(), err))
 		}
 		defer ln.Close()
-		go func() { _ = sshc.Serve(ln, localDialer(m, cfg, f), logf) }()
+		go func() { relay.Serve(ln, localDialer(m, cfg, f), logf) }()
 	}
 	if a.noCommand {
 		return waitClient(c)

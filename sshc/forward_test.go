@@ -9,9 +9,9 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
-	"sync/atomic"
 	"testing"
 
+	"github.com/tarasglek/stunmesh-cli/relay"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -117,9 +117,10 @@ func TestLocalForward(t *testing.T) {
 		t.Fatalf("ListenLocal port 0: %v, %v", lns, err)
 	}
 	ln := lns[0]
-	done := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		done <- Serve(ln, func() (net.Conn, error) { return c.Dial("tcp", f.Target()) }, t.Logf)
+		relay.Serve(ln, func() (net.Conn, error) { return c.Dial("tcp", f.Target()) }, t.Logf)
+		close(done)
 	}()
 	for _, msg := range []string{"one", "two"} {
 		if got := talk(t, ln.Addr().String(), msg); got != "got "+msg {
@@ -127,9 +128,7 @@ func TestLocalForward(t *testing.T) {
 		}
 	}
 	ln.Close()
-	if err := <-done; err != nil {
-		t.Errorf("Serve after close: %v", err)
-	}
+	<-done
 }
 
 // -R: the server listens, on loopback with a port it picks, and its
@@ -149,44 +148,9 @@ func TestRemoteForward(t *testing.T) {
 	if a := netip.MustParseAddrPort(ln.Addr().String()); !a.Addr().IsLoopback() || a.Port() == 0 {
 		t.Fatalf("remote listener at %v", ln.Addr())
 	}
-	go func() { _ = Serve(ln, func() (net.Conn, error) { return net.Dial("tcp", f.Target()) }, t.Logf) }()
+	go func() { relay.Serve(ln, func() (net.Conn, error) { return net.Dial("tcp", f.Target()) }, t.Logf) }()
 	if got := talk(t, ln.Addr().String(), "back"); got != "got back" {
 		t.Errorf("-R = %q", got)
-	}
-}
-
-// A target that refuses closes just that connection; the forward lives on.
-func TestServeDialFailure(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	target := answerAfterEOF(t)
-	var dials atomic.Int32
-	logged := make(chan string, 1)
-	go func() {
-		_ = Serve(ln, func() (net.Conn, error) {
-			if dials.Add(1) == 1 {
-				return nil, io.ErrUnexpectedEOF
-			}
-			return net.Dial("tcp", target.Addr().String())
-		}, func(f string, a ...any) { logged <- f })
-	}()
-	// Closed with our bytes unread, the connection may end in a reset
-	// rather than EOF; either way nothing comes back.
-	c, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = c.Write([]byte("x"))
-	if b, _ := io.ReadAll(c); len(b) != 0 {
-		t.Errorf("failed dial answered %q", b)
-	}
-	c.Close()
-	<-logged
-	if got := talk(t, ln.Addr().String(), "y"); got != "got y" {
-		t.Errorf("after a failed dial: %q", got)
 	}
 }
 
