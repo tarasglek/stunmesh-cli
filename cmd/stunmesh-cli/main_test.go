@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPick(t *testing.T) {
@@ -30,9 +31,20 @@ func TestPick(t *testing.T) {
 	}
 }
 
-// testProc is a process with environment env and no stdin.
+// testProc is a process with environment env, no stdin and the node
+// config in env["config"], if any.
 func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
-	return proc{strings.NewReader(""), out, errb, func(k string) string { return env[k] }, rand.Reader}
+	config := func() ([]byte, error) {
+		if c, ok := env["config"]; ok {
+			return []byte(c), nil
+		}
+		return embeddedConfig()
+	}
+	return proc{
+		in: strings.NewReader(""), out: out, err: errb,
+		getenv: func(k string) string { return env[k] }, rand: rand.Reader, config: config,
+		now: time.Now, sleep: time.Sleep,
+	}
 }
 
 func runEnv(env map[string]string, argv ...string) (int, string, string) {
@@ -44,7 +56,7 @@ func runEnv(env map[string]string, argv ...string) (int, string, string) {
 func runCapture(argv ...string) (int, string, string) { return runEnv(nil, argv...) }
 
 func TestRun(t *testing.T) {
-	if code, out, _ := runCapture("stunmesh-cli", "--list"); code != 0 || out != "keygen\n" {
+	if code, out, _ := runCapture("stunmesh-cli", "--list"); code != 0 || out != "keygen\nstatus\n" {
 		t.Errorf("--list: %d %q", code, out)
 	}
 	if code, out, _ := runCapture("stunmesh-cli", "--version"); code != 0 || !strings.HasPrefix(out, "stunmesh-cli ") {

@@ -9,10 +9,23 @@ WireGuard runs on wireguard-go's netstack inside the process; peer discovery
 is the standard stunmesh-go machinery with the lease plugin from
 [stunmesh-avahi](https://github.com/tarasglek/stunmesh-avahi).
 
-Planned, not built yet: the node's public config and a static hosts table
-compiled in from `cmd/stunmesh-cli/config/node.json`, which `make build
-NODE=...` copies there and git ignores, so the repo carries no site
-config; the private key generated on the device, never in the binary.
+The node's public config and a static hosts table are compiled in; the
+private key is made on the device and never in the config or binary.
+
+## Use
+
+```sh
+build/bin/keygen                      # once per device; prints the pubkey for mesh.yaml
+# in mesh.yaml: <name>-cli: { ip: ..., port: ..., pubkey: ..., client: true }; gen.py; reinstall peers
+make build NODE=<name>-cli CONFIG=<dir of mesh.yaml>
+export PATH=$PWD/build/bin:$PATH      # applet symlinks: status, keygen, ...
+status -w 30s remote-01               # hosts table, live peer state
+```
+
+`make build NODE=...` copies `CONFIG/NODE/node.json` into
+`cmd/stunmesh-cli/config/`, which git ignores, so the repo carries no site
+config. Names resolve from the compiled-in table only, never DNS.
+`STUNMESH_CLI_LOG=info` shows the node's log on stderr.
 
 ## Build
 

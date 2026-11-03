@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // version is stamped by the Makefile.
@@ -28,12 +29,17 @@ type proc struct {
 	out, err io.Writer
 	getenv   func(string) string
 	rand     io.Reader
+	// config is the node config compiled in.
+	config func() ([]byte, error)
+	now    func() time.Time
+	sleep  func(time.Duration)
 }
 
 type applet func(args []string, p proc) int
 
 var applets = map[string]applet{
 	"keygen": keygen,
+	"status": status,
 }
 
 // fail reports an applet's error the way every applet does.
@@ -82,5 +88,9 @@ func run(argv []string, p proc) int {
 }
 
 func main() {
-	os.Exit(run(os.Args, proc{os.Stdin, os.Stdout, os.Stderr, os.Getenv, rand.Reader}))
+	os.Exit(run(os.Args, proc{
+		in: os.Stdin, out: os.Stdout, err: os.Stderr,
+		getenv: os.Getenv, rand: rand.Reader, config: embeddedConfig,
+		now: time.Now, sleep: time.Sleep,
+	}))
 }
