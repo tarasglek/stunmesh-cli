@@ -31,8 +31,9 @@ type sshArgs struct {
 	remote     []sshc.Forward
 	port       uint16
 	user, host string
-	command    string
-	noCommand  bool // -N
+	command    string   // the command words joined, as ssh sends them
+	args       []string // the command words, for mosh-server to exec
+	noCommand  bool     // -N
 }
 
 // parseSSHArgs reads the OpenSSH options the applet supports, as
@@ -109,6 +110,9 @@ func parseSSHArgs(args []string, defaultUser string) (sshArgs, error) {
 	}
 	if a.host == "" || a.user == "" {
 		return a, errors.New("no host or user")
+	}
+	if len(args) > 0 {
+		a.args = args
 	}
 	a.command = strings.Join(args, " ")
 	if a.noCommand && a.command != "" {

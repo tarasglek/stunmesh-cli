@@ -38,15 +38,15 @@ func TestParseSSHArgs(t *testing.T) {
 		want sshArgs
 	}{
 		{[]string{"remote-01"}, sshArgs{port: 22, user: "me", host: "remote-01"}},
-		{[]string{"root@desk", "uname", "-a"}, sshArgs{port: 22, user: "root", host: "desk", command: "uname -a"}},
-		{[]string{"remote-01", "--", "uname", "-a"}, sshArgs{port: 22, user: "me", host: "remote-01", command: "uname -a"}},
-		{[]string{"h", "-p", "2222", "ls", "-p"}, sshArgs{port: 2222, user: "me", host: "h", command: "ls -p"}},
-		{[]string{"h", "ls", "--", "x"}, sshArgs{port: 22, user: "me", host: "h", command: "ls -- x"}},
+		{[]string{"root@desk", "uname", "-a"}, sshArgs{port: 22, user: "root", host: "desk", command: "uname -a", args: []string{"uname", "-a"}}},
+		{[]string{"remote-01", "--", "uname", "-a"}, sshArgs{port: 22, user: "me", host: "remote-01", command: "uname -a", args: []string{"uname", "-a"}}},
+		{[]string{"h", "-p", "2222", "ls", "-p"}, sshArgs{port: 2222, user: "me", host: "h", command: "ls -p", args: []string{"ls", "-p"}}},
+		{[]string{"h", "ls", "--", "x"}, sshArgs{port: 22, user: "me", host: "h", command: "ls -- x", args: []string{"ls", "--", "x"}}},
 		{[]string{"-p", "2222", "-l", "alice", "x@h"}, sshArgs{port: 2222, user: "alice", host: "h"}},
 		{[]string{"-p2222", "-i", "k1", "-ik2", "h"}, sshArgs{port: 2222, user: "me", host: "h", identities: []string{"k1", "k2"}}},
 		{[]string{"-N", "-L", "8080:127.0.0.1:80", "-R2222:127.0.0.1:22", "h"},
 			sshArgs{port: 22, user: "me", host: "h", noCommand: true, local: []sshc.Forward{fwd("8080:127.0.0.1:80")}, remote: []sshc.Forward{fwd("2222:127.0.0.1:22")}}},
-		{[]string{"--", "h", "ls"}, sshArgs{port: 22, user: "me", host: "h", command: "ls"}},
+		{[]string{"--", "h", "ls"}, sshArgs{port: 22, user: "me", host: "h", command: "ls", args: []string{"ls"}}},
 	} {
 		got, err := parseSSHArgs(tc.args, "me")
 		if err != nil || !reflect.DeepEqual(got, tc.want) {

@@ -23,7 +23,7 @@ require (
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
-	github.com/creack/pty v1.1.24 // indirect
+	github.com/creack/pty v1.1.24
 	github.com/jpillora/jplog v1.0.2 // indirect
 	github.com/jpillora/sftp v1.13.15 // indirect
 	github.com/kr/fs v0.1.0 // indirect

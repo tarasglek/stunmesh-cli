@@ -56,7 +56,7 @@ func runEnv(env map[string]string, argv ...string) (int, string, string) {
 func runCapture(argv ...string) (int, string, string) { return runEnv(nil, argv...) }
 
 func TestRun(t *testing.T) {
-	if code, out, _ := runCapture("stunmesh-cli", "--list"); code != 0 || out != "keygen\nlisten\nnc\nssh\nstatus\n" {
+	if code, out, _ := runCapture("stunmesh-cli", "--list"); code != 0 || out != "keygen\nlisten\nmosh\nnc\nssh\nstatus\n" {
 		t.Errorf("--list: %d %q", code, out)
 	}
 	if code, out, _ := runCapture("stunmesh-cli", "--version"); code != 0 || !strings.HasPrefix(out, "stunmesh-cli ") {
