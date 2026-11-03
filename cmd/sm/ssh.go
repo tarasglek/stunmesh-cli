@@ -285,6 +285,9 @@ func sshClientConfig(p proc, a sshArgs, cfg mesh.Config, addr netip.Addr, dbg fu
 		confirm = func(host string, key ssh.PublicKey) bool {
 			ans, err := p.prompt(fmt.Sprintf("The authenticity of host '%s' can't be established.\n%s key fingerprint is %s.\nAre you sure you want to continue connecting (yes/no)? ",
 				host, key.Type(), ssh.FingerprintSHA256(key)), true)
+			if err != nil {
+				fmt.Fprintf(p.err, "%s: cannot ask about the host key: %v\n", self, err)
+			}
 			return err == nil && strings.TrimSpace(ans) == "yes"
 		}
 	}
