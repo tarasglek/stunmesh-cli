@@ -129,7 +129,7 @@ func (m *Mesh) UDPRelay(host string, port uint16) (localPort uint16, stop func()
 	m.mu.Lock()
 	m.relays[local] = struct{}{}
 	m.mu.Unlock()
-	go relay.UDP(local, remote)
+	go relay.UDP(local, remote, nil)
 	stop = func() {
 		m.mu.Lock()
 		delete(m.relays, local)

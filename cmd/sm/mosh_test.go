@@ -115,7 +115,7 @@ func TestMoshClientThroughRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer local.Close()
-	go relay.UDP(local, remote)
+	go relay.UDP(local, remote, nil)
 
 	keyboard, tty, err := pty.Open()
 	if err != nil {

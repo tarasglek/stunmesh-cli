@@ -161,7 +161,8 @@ func TestServeRetriesAccept(t *testing.T) {
 
 // udpRelay runs UDP between a fresh loopback socket and a conn to an echo
 // server that prefixes what it sends back, and returns the socket's address.
-func udpRelay(t *testing.T) (net.Addr, func()) {
+// sender, if not nil, is UDP's.
+func udpRelay(t *testing.T, sender func(net.Addr)) (net.Addr, func()) {
 	t.Helper()
 	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -187,7 +188,7 @@ func udpRelay(t *testing.T) (net.Addr, func()) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	go func() { UDP(local, remote); close(done) }()
+	go func() { UDP(local, remote, sender); close(done) }()
 	stop := func() {
 		local.Close()
 		select {
@@ -218,7 +219,8 @@ func roundTrip(t *testing.T, c net.Conn, msg string) {
 func TestUDP(t *testing.T) {
 	defer func(d time.Duration) { hopAfter = d }(hopAfter)
 	hopAfter = 100 * time.Millisecond
-	addr, stop := udpRelay(t)
+	senders := make(chan net.Addr, 4)
+	addr, stop := udpRelay(t, func(a net.Addr) { senders <- a })
 	first, err := net.Dial("udp", addr.String())
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +228,9 @@ func TestUDP(t *testing.T) {
 	defer first.Close()
 	roundTrip(t, first, "one")
 	roundTrip(t, first, "two")
+	if a := <-senders; a.String() != first.LocalAddr().String() {
+		t.Errorf("sender %v, want %v", a, first.LocalAddr())
+	}
 
 	time.Sleep(2 * hopAfter)
 	hopped, err := net.Dial("udp", addr.String())
@@ -235,12 +240,18 @@ func TestUDP(t *testing.T) {
 	defer hopped.Close()
 	roundTrip(t, hopped, "after the hop")
 	stop()
+	if a := <-senders; a.String() != hopped.LocalAddr().String() {
+		t.Errorf("sender after the hop %v, want %v", a, hopped.LocalAddr())
+	}
+	if len(senders) != 0 {
+		t.Errorf("sender called %d more times for known senders", len(senders))
+	}
 }
 
 // While the client is active, another local sender neither gets its
 // answers nor reaches the far end.
 func TestUDPKeepsActiveClient(t *testing.T) {
-	addr, stop := udpRelay(t)
+	addr, stop := udpRelay(t, nil)
 	defer stop()
 	client, err := net.Dial("udp", addr.String())
 	if err != nil {

@@ -25,8 +25,9 @@ var hopAfter = 6 * time.Second
 // missed 3 s mosh heartbeats is short against the 60 s mosh-client keeps
 // reading its old port. Datagrams from remote before the program has
 // sent are dropped. UDP returns when either side fails, as when the
-// caller closes one, and closes both.
-func UDP(local net.PacketConn, remote net.Conn) {
+// caller closes one, and closes both. If sender is not nil, UDP calls it
+// with the program's address whenever that changes.
+func UDP(local net.PacketConn, remote net.Conn, sender func(net.Addr)) {
 	var (
 		mu    sync.Mutex
 		peer  net.Addr
@@ -66,13 +67,17 @@ func UDP(local net.PacketConn, remote net.Conn) {
 		}
 		now := time.Now()
 		mu.Lock()
-		ok := peer == nil || sameAddr(peer, from) || now.Sub(heard) > hopAfter
+		same := peer != nil && sameAddr(peer, from)
+		ok := peer == nil || same || now.Sub(heard) > hopAfter
 		if ok {
 			peer, heard = from, now
 		}
 		mu.Unlock()
 		if !ok {
 			continue
+		}
+		if !same && sender != nil {
+			sender(from)
 		}
 		if _, err := remote.Write(b[:n]); err != nil {
 			return
