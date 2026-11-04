@@ -54,13 +54,12 @@ network timeout, so a phone can sleep through a long outage.
 ## Build
 
 The extension points it needs are not merged upstream yet, so `go.mod`
-replaces three modules with checkouts next to this one:
+replaces two modules with checkouts next to this one:
 
 | Module | Checkout | Branch |
 |---|---|---|
 | stunmesh-go | `../stunmesh-go` | `userspace-tun` |
 | stunmesh-avahi | `../stunmesh-avahi` | `main` |
-| sshd-lite | `../sshd-lite` | `mosh-connect` |
 
 ```sh
 make check    # vet, test, build build/sm-<arch>

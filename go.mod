@@ -4,15 +4,14 @@ go 1.26.5
 
 // Until the extension points are merged upstream, build against the forks
 // checked out next to this repo: stunmesh-go branch userspace-tun,
-// stunmesh-avahi branch main, sshd-lite branch mosh-connect.
+// stunmesh-avahi branch main.
 replace (
-	github.com/jpillora/sshd-lite => ../sshd-lite
 	github.com/tarasglek/stunmesh-avahi => ../stunmesh-avahi
 	github.com/tjjh89017/stunmesh-go => ../stunmesh-go
 )
 
 require (
-	github.com/jpillora/sshd-lite v0.0.0-00010101000000-000000000000
+	github.com/jpillora/sshd-lite v1.55.5-0.20261023102625-7042db6a1958
 	github.com/tarasglek/stunmesh-avahi v0.0.0-00010101000000-000000000000
 	github.com/tjjh89017/stunmesh-go v1.16.0
 	golang.org/x/crypto v0.58.0
