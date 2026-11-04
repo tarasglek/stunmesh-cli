@@ -12,8 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 
 	"github.com/tarasglek/stunmesh-cli/mesh"
 	"github.com/tarasglek/stunmesh-cli/sshc"
@@ -453,5 +456,150 @@ func TestDaemonClientRetry(t *testing.T) {
 	d := &daemonClient{cfg: f.cfg, sock: sock, id: "node"}
 	if peers, err := d.Peers(); err != nil || len(peers) != 1 {
 		t.Errorf("Peers after a dropped connection = %v, %v", peers, err)
+	}
+}
+
+// The daemon carries a dial to and from the client's pipes itself: what
+// is written to stdin reaches the host, stdin's EOF is passed on, the
+// answer comes out on stdout, and stdout's EOF ends the client's wait.
+func TestDaemonDialStdio(t *testing.T) {
+	d, _, _, _ := testDaemon(t, 0)
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outR.Close()
+	done := make(chan error, 1)
+	go func() { done <- d.DialStdio(context.Background(), "remote-01", 22, inR, outW) }()
+	if _, err := io.WriteString(inW, "ping"); err != nil {
+		t.Fatal(err)
+	}
+	inW.Close()
+	b, err := io.ReadAll(outR)
+	if err != nil || string(b) != "got ping" {
+		t.Errorf("stdout %q, %v", b, err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("DialStdio: %v", err)
+	}
+}
+
+// stdin and stdout may be one socket, as when ssh hands its ProxyCommand
+// a socketpair.
+func TestDaemonDialStdioSocket(t *testing.T) {
+	d, _, _, _ := testDaemon(t, 0)
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine, err := net.FileConn(os.NewFile(uintptr(fds[0]), "ssh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mine.Close()
+	stdio := os.NewFile(uintptr(fds[1]), "stdio")
+	done := make(chan error, 1)
+	go func() { done <- d.DialStdio(context.Background(), "remote-01", 22, stdio, stdio) }()
+	if got := talk(t, mine, "ping"); got != "got ping" {
+		t.Errorf("answer %q", got)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("DialStdio: %v", err)
+	}
+}
+
+// A client that goes away takes its stream with it, as when ssh kills its
+// ProxyCommand: the daemon lets the pipes go, and ssh sees EOF.
+func TestDaemonDialStdioClientGone(t *testing.T) {
+	d, _, _, _ := testDaemon(t, 0)
+	inR, inW, _ := os.Pipe()
+	outR, outW, _ := os.Pipe()
+	defer inW.Close()
+	defer outR.Close()
+	res, _, conn, err := d.request(context.Background(), "POST", "/v0/dial", http.Header{
+		"Connection": {"Upgrade"}, "Upgrade": {"sm-dial"}, "Dial-Stdio": {"pass"},
+		"Dial-Host": {"remote-01"}, "Dial-Port": {"22"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if _, _, err := conn.(*net.UnixConn).WriteMsgUnix([]byte{0}, syscall.UnixRights(int(inR.Fd()), int(outW.Fd())), nil); err != nil {
+		t.Fatal(err)
+	}
+	inR.Close()
+	outW.Close()
+	conn.Close()
+	_ = outR.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if b, err := io.ReadAll(outR); err != nil || len(b) != 0 {
+		t.Errorf("stdout after the client went: %q, %v", b, err)
+	}
+}
+
+// Only pipes and sockets are passed; a terminal, a file or /dev/null keep
+// the stream through the client.
+func TestPassable(t *testing.T) {
+	r, w, _ := os.Pipe()
+	defer r.Close()
+	defer w.Close()
+	if _, _, ok := passable(r, w); !ok {
+		t.Error("pipes not passable")
+	}
+	ptm, tty, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ptm.Close()
+	defer tty.Close()
+	null, _ := os.Open(os.DevNull)
+	defer null.Close()
+	file, _ := os.Create(filepath.Join(t.TempDir(), "f"))
+	defer file.Close()
+	for name, f := range map[string]*os.File{"tty": tty, "/dev/null": null, "file": file} {
+		if _, _, ok := passable(f, w); ok {
+			t.Errorf("%s as stdin passable", name)
+		}
+		if _, _, ok := passable(r, f); ok {
+			t.Errorf("%s as stdout passable", name)
+		}
+	}
+	if _, _, ok := passable(strings.NewReader(""), w); ok {
+		t.Error("a reader that is no file passable")
+	}
+}
+
+// The pipes go back blocking, as they came: after sm nc, another process
+// may read the same description, as cat in producer | { sm nc ...; cat; }.
+func TestDaemonDialStdioRestoresBlocking(t *testing.T) {
+	d, _, _, _ := testDaemon(t, 0)
+	inR, inW, _ := os.Pipe()
+	outR, outW, _ := os.Pipe()
+	defer outR.Close()
+	// The shell's copies, which outlive the ones sm nc passes.
+	shared := map[string]int{}
+	for name, f := range map[string]*os.File{"stdin": inR, "stdout": outW} {
+		fd, err := syscall.Dup(int(f.Fd()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer syscall.Close(fd)
+		shared[name] = fd
+	}
+	done := make(chan error, 1)
+	go func() { done <- d.DialStdio(context.Background(), "remote-01", 22, inR, outW) }()
+	io.WriteString(inW, "ping")
+	inW.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("DialStdio: %v", err)
+	}
+	for name, fd := range shared {
+		flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFL, 0)
+		if errno != 0 || flags&syscall.O_NONBLOCK != 0 {
+			t.Errorf("%s after the stream: flags %#x, %v; want blocking", name, flags, errno)
+		}
 	}
 }

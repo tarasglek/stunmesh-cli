@@ -43,6 +43,16 @@ func nc(args []string, p proc) int {
 	defer n.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
+	// Given ssh's pipes, the daemon carries them itself, as the node in
+	// this process did, so the daemon adds no hop.
+	if d, ok := n.(*daemonClient); ok {
+		if in, out, ok := passable(p.in, p.out); ok {
+			if err := d.DialStdio(ctx, host, uint16(port), in, out); err != nil {
+				return fail(p, "nc", fmt.Errorf("%s:%d: %w%s", host, port, err, logHint(p)))
+			}
+			return 0
+		}
+	}
 	c, err := n.DialTCP(ctx, host, uint16(port))
 	if err != nil {
 		return fail(p, "nc", fmt.Errorf("%s:%d: %w%s", host, port, err, logHint(p)))
