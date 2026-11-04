@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,8 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,6 +40,79 @@ type daemonClient struct {
 	// start, if not nil, starts a daemon when none holds the lock and
 	// returns its report: "ok", "busy" or why it could not start.
 	start func() (string, error)
+}
+
+// newDaemonClient is a client of the daemon for p's node config and key,
+// which starts one as p would: the same executable and config.
+func newDaemonClient(p proc, cfg mesh.Config) (*daemonClient, error) {
+	b, err := p.config()
+	if err != nil {
+		return nil, err
+	}
+	key, err := keyPath(p.getenv)
+	if err != nil {
+		return nil, err
+	}
+	keyBytes, _ := os.ReadFile(key) // the daemon reports a missing key
+	sock, lock, log, err := daemonPaths(p.getenv)
+	if err != nil {
+		return nil, err
+	}
+	return &daemonClient{cfg: cfg, sock: sock, lock: lock, id: nodeID(b, keyBytes),
+		start: func() (string, error) {
+			exe, err := os.Executable()
+			if err != nil {
+				return "", err
+			}
+			return startDaemon(exe, p.configFile, log)
+		}}, nil
+}
+
+// startDaemon starts exe as sm daemon -bg, detached from this process's session
+// and directory, and returns what it reports: "ok" once it serves, "busy"
+// if another holds the lock, or why it could not start.
+func startDaemon(exe, configFile, log string) (string, error) {
+	args := []string{self}
+	if configFile != "" {
+		abs, err := filepath.Abs(configFile)
+		if err != nil {
+			return "", err
+		}
+		args = append(args, "--config", abs)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	cmd := &exec.Cmd{Path: exe, Args: append(args, "daemon", "-bg"), Dir: "/", ExtraFiles: []*os.File{w},
+		SysProcAttr: &syscall.SysProcAttr{Setsid: true}}
+	// The daemon outlives this process, so it must not keep descriptors
+	// this one inherited, such as a pipe whose reader waits for EOF.
+	closeOnExec()
+	err = cmd.Start()
+	w.Close()
+	if err != nil {
+		return "", err
+	}
+	go cmd.Wait() // reaps it, should it exit first
+	// The report's line, not EOF, ends the wait: a child of the daemon
+	// may hold the pipe for as long as it runs.
+	line, _ := bufio.NewReader(io.LimitReader(r, 4096)).ReadString('\n')
+	if msg := strings.TrimSpace(line); msg != "" {
+		return msg, nil
+	}
+	return fmt.Sprintf("sm daemon exited before serving; see %s", log), nil
+}
+
+// closeOnExec marks every descriptor but stdio close-on-exec.
+func closeOnExec() {
+	ents, _ := os.ReadDir("/proc/self/fd")
+	for _, e := range ents {
+		if fd, err := strconv.Atoi(e.Name()); err == nil && fd > 2 {
+			syscall.CloseOnExec(fd)
+		}
+	}
 }
 
 // connect connects to the daemon, starting one if none holds the lock.

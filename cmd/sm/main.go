@@ -31,10 +31,11 @@ type proc struct {
 	out, err io.Writer
 	getenv   func(string) string
 	rand     io.Reader
-	// config is the node config compiled in.
-	config func() ([]byte, error)
-	now    func() time.Time
-	sleep  func(time.Duration)
+	// config is the node config compiled in, or read from configFile.
+	config     func() ([]byte, error)
+	configFile string
+	now        func() time.Time
+	sleep      func(time.Duration)
 	// prompt asks the user on the terminal; nil when there is none.
 	prompt sshc.Prompt
 }
@@ -82,7 +83,7 @@ func run(argv []string, p proc) int {
 			fmt.Fprintf(p.err, "usage: %s --config FILE <applet> [args...]\n", self)
 			return 2
 		}
-		p.config = configSource(args[0], nil)
+		p.config, p.configFile = configSource(args[0], nil), args[0]
 		name, args = args[1], args[2:]
 	}
 	if name == "--version" {
@@ -106,10 +107,14 @@ func run(argv []string, p proc) int {
 	return a(args, p)
 }
 
-func main() {
-	os.Exit(run(os.Args, proc{
+func main() { os.Exit(run(os.Args, osProc())) }
+
+// osProc is this process.
+func osProc() proc {
+	file := os.Getenv("STUNMESH_CLI_CONFIG")
+	return proc{
 		in: os.Stdin, out: os.Stdout, err: os.Stderr,
-		getenv: os.Getenv, rand: rand.Reader, config: configSource(os.Getenv("STUNMESH_CLI_CONFIG"), os.Executable),
+		getenv: os.Getenv, rand: rand.Reader, config: configSource(file, os.Executable), configFile: file,
 		now: time.Now, sleep: time.Sleep, prompt: ttyPrompt,
-	}))
+	}
 }

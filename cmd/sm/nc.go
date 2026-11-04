@@ -72,6 +72,11 @@ func splice(c net.Conn, in io.Reader, out io.Writer) error {
 // the reason is (STUN failed, no record for the peer, the peer is away),
 // unless the user is already reading it.
 func logHint(p proc) string {
+	if useDaemon(p) {
+		if _, _, log, err := daemonPaths(p.getenv); err == nil {
+			return " (sm daemon's log: " + log + ")"
+		}
+	}
 	if p.getenv("STUNMESH_CLI_LOG") != "" {
 		return ""
 	}

@@ -29,9 +29,14 @@ type node interface {
 	Close()
 }
 
-// openNode brings this device's node up for an applet; want, if any,
-// narrows it to the peers at those addresses.
+// openNode is the node for an applet: sm daemon's, which it starts if
+// none runs, so that the user's sm processes share one node. With
+// $STUNMESH_CLI_DAEMON=off it brings one up in this process instead,
+// for one-shot use, narrowed to the peers at want, if any.
 func openNode(p proc, cfg mesh.Config, verbose int, want ...netip.Addr) (node, error) {
+	if useDaemon(p) {
+		return newDaemonClient(p, cfg)
+	}
 	if len(want) > 0 {
 		var err error
 		if cfg, err = cfg.Narrow(want...); err != nil {
@@ -44,6 +49,8 @@ func openNode(p proc, cfg mesh.Config, verbose int, want ...netip.Addr) (node, e
 	}
 	return inProcess{m, p}, nil
 }
+
+func useDaemon(p proc) bool { return p.getenv("STUNMESH_CLI_DAEMON") != "off" }
 
 // inProcess is a node running in this process.
 type inProcess struct {
