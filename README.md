@@ -41,7 +41,21 @@ zip entry at the end of the file: `sm config` or `unzip -p sm node.json`
 prints it. `sm --config FILE <applet>` or `$STUNMESH_CLI_CONFIG=FILE`
 reads one from the file system instead. Names resolve from that table
 only, never DNS.
-`STUNMESH_CLI_LOG=info` shows the node's log on stderr.
+
+One node serves all of the user's sm processes: the first applet that
+needs the mesh starts `sm daemon` in the background, and every later one,
+in any terminal, uses it, already joined. The applets reach it over HTTP
+on a unix socket, `$XDG_RUNTIME_DIR/sm.sock` or next to the key, which
+only the same user may use, not even root; its log is `sm.log` beside
+it. With no clients and no UDP relay a program still uses, it exits
+after 5 minutes; `sm down` stops it at once, and `sm daemon [-idle 0]`
+runs it in the foreground. The daemon joins every peer of the config,
+where an applet's own node joined only the peers it needed, so on a
+large mesh the first dial after the daemon starts may be slower than
+before; later ones skip the join and are faster.
+`STUNMESH_CLI_DAEMON=off` runs a node inside the applet instead, as
+one-shot uses and tests may want; `STUNMESH_CLI_LOG=info` then shows
+its log on stderr.
 
 mosh needs mosh-client here and mosh-server on the host, as mosh does.
 sm starts mosh-server over SSH through the node, then runs mosh-client
