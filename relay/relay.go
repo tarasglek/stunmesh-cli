@@ -40,7 +40,7 @@ func Serve(ln net.Listener, dial func() (net.Conn, error), logf func(format stri
 				a.Close()
 				return
 			}
-			pipe(a, b)
+			Pipe(a, b)
 		}()
 	}
 }
@@ -48,10 +48,10 @@ func Serve(ln net.Listener, dial func() (net.Conn, error), logf func(format stri
 // sleep is time.Sleep, swapped out by tests.
 var sleep = time.Sleep
 
-// pipe copies a to b and b to a, passing each EOF on as a half close so
+// Pipe copies a to b and b to a, passing each EOF on as a half close so
 // protocols that answer after EOF work, and closes both when both
 // directions are done.
-func pipe(a, b net.Conn) {
+func Pipe(a, b net.Conn) {
 	var wg sync.WaitGroup
 	half := func(dst, src net.Conn) {
 		defer wg.Done()
