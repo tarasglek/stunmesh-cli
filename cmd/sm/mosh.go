@@ -55,28 +55,25 @@ func moshApplet(args []string, p proc) int {
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
-	if cfg, err = cfg.Narrow(addr); err != nil {
-		return fail(p, "mosh", err)
-	}
 	dbg := debugf(p, "mosh", a.verbose)
-	dbg("%s is %s in the hosts table; node narrowed to %d peer(s)", a.host, addr, len(cfg.Peers))
+	dbg("%s is %s in the hosts table", a.host, addr)
 	dbg("user %s from %s", a.user, a.userFrom)
 	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr, dbg)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
 	defer closeAuth()
-	m, err := startMesh(p, cfg, a.verbose)
+	n, err := openNode(p, cfg, a.verbose, addr)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
-	defer m.Stop()
+	defer n.Close()
 
 	cols, rows, err := term.GetSize(int(in.Fd()))
 	if err != nil {
 		cols, rows = 80, 24
 	}
-	c, err := dialSSH(p, m, a, clientCfg, dialTimeout, dbg)
+	c, err := dialSSH(p, n, a, clientCfg, dialTimeout, dbg)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
@@ -87,7 +84,7 @@ func moshApplet(args []string, p proc) int {
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
-	local, stop, err := m.UDPRelay(a.host, port)
+	local, stop, err := n.UDPRelay(a.host, port)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}

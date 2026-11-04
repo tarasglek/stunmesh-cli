@@ -36,17 +36,14 @@ func nc(args []string, p proc) int {
 	if err != nil {
 		return fail(p, "nc", err)
 	}
-	if cfg, err = cfg.Narrow(addr); err != nil {
-		return fail(p, "nc", err)
-	}
-	m, err := startMesh(p, cfg, 0)
+	n, err := openNode(p, cfg, 0, addr)
 	if err != nil {
 		return fail(p, "nc", err)
 	}
-	defer m.Stop()
+	defer n.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
-	c, err := m.DialTCP(ctx, host, uint16(port))
+	c, err := n.DialTCP(ctx, host, uint16(port))
 	if err != nil {
 		return fail(p, "nc", fmt.Errorf("%s:%d: %w%s", host, port, err, logHint(p)))
 	}

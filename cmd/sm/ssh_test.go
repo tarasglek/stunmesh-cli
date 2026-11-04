@@ -243,7 +243,7 @@ func TestSSHVerbose(t *testing.T) {
 		t.Errorf("trace without -v: %q", quiet)
 	}
 	_, _, errs := runEnv(env, "sm", "ssh", "-v", "remote-01")
-	for _, want := range []string{"sm ssh: debug1: remote-01 is 10.200.0.5 in the hosts table; node narrowed to 1 peer(s)", "agent: no SSH_AUTH_SOCK", "run sm keygen"} {
+	for _, want := range []string{"sm ssh: debug1: remote-01 is 10.200.0.5 in the hosts table", "agent: no SSH_AUTH_SOCK", "run sm keygen"} {
 		if !strings.Contains(errs, want) {
 			t.Errorf("-v output lacks %q:\n%s", want, errs)
 		}

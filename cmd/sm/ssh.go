@@ -155,11 +155,8 @@ func sshApplet(args []string, p proc) int {
 			want = append(want, fa)
 		}
 	}
-	if cfg, err = cfg.Narrow(want...); err != nil {
-		return failSSH(p, err)
-	}
 	dbg := debugf(p, "ssh", a.verbose)
-	dbg("%s is %s in the hosts table; node narrowed to %d peer(s)", a.host, addr, len(cfg.Peers))
+	dbg("%s is %s in the hosts table", a.host, addr)
 	dbg("user %s from %s", a.user, a.userFrom)
 	clientCfg, closeAuth, err := sshClientConfig(p, a, cfg, addr, dbg)
 	if err != nil {
@@ -167,12 +164,12 @@ func sshApplet(args []string, p proc) int {
 	}
 	defer closeAuth()
 
-	m, err := startMesh(p, cfg, a.verbose)
+	n, err := openNode(p, cfg, a.verbose, want...)
 	if err != nil {
 		return failSSH(p, err)
 	}
-	defer m.Stop()
-	c, err := dialSSH(p, m, a, clientCfg, dialTimeout, dbg)
+	defer n.Close()
+	c, err := dialSSH(p, n, a, clientCfg, dialTimeout, dbg)
 	if err != nil {
 		return failSSH(p, err)
 	}
@@ -195,7 +192,7 @@ func sshApplet(args []string, p proc) int {
 			return failSSH(p, fmt.Errorf("-R %s: %w", f.ListenAddr(), err))
 		}
 		defer ln.Close()
-		go func() { relay.Serve(ln, localDialer(m, cfg, f), logf) }()
+		go func() { relay.Serve(ln, localDialer(n, cfg, f), logf) }()
 	}
 	if a.noCommand {
 		return waitClient(c)
@@ -209,7 +206,9 @@ func sshApplet(args []string, p proc) int {
 
 // localDialer dials an -R target from this side: a mesh host through the
 // node, anything else, such as localhost, directly.
-func localDialer(m *mesh.Mesh, cfg mesh.Config, f sshc.Forward) func() (net.Conn, error) {
+func localDialer(m interface {
+	DialTCP(context.Context, string, uint16) (net.Conn, error)
+}, cfg mesh.Config, f sshc.Forward) func() (net.Conn, error) {
 	if _, err := cfg.Lookup(f.Host); err == nil {
 		return func() (net.Conn, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
@@ -321,13 +320,13 @@ func sshClientConfig(p proc, a sshArgs, cfg mesh.Config, addr netip.Addr, dbg fu
 
 // dialSSH connects to the host in a through the node and logs in, within
 // timeout, tracing each step to dbg.
-func dialSSH(p proc, m *mesh.Mesh, a sshArgs, cfg *ssh.ClientConfig, timeout time.Duration, dbg func(string, ...any)) (*ssh.Client, error) {
+func dialSSH(p proc, n node, a sshArgs, cfg *ssh.ClientConfig, timeout time.Duration, dbg func(string, ...any)) (*ssh.Client, error) {
 	hostport := net.JoinHostPort(a.host, strconv.Itoa(int(a.port)))
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	start := p.now()
 	dbg("connecting to %s through the mesh", hostport)
-	conn, err := m.DialTCP(ctx, a.host, a.port)
+	conn, err := n.DialTCP(ctx, a.host, a.port)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w%s", hostport, err, logHint(p))
 	}

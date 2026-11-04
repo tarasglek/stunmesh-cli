@@ -36,12 +36,12 @@ func status(args []string, p proc) int {
 	}
 	var peers []mesh.PeerStatus
 	if *wait > 0 {
-		m, err := startMesh(p, cfg, 0)
+		n, err := openNode(p, cfg, 0)
 		if err != nil {
 			return fail(p, "status", err)
 		}
-		defer m.Stop()
-		if peers, err = waitHandshakes(m.Peers, want, *wait, p.now, p.sleep); err != nil {
+		defer n.Close()
+		if peers, err = waitHandshakes(n.Peers, want, *wait, p.now, p.sleep); err != nil {
 			return fail(p, "status", err)
 		}
 	}

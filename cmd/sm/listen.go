@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/tarasglek/stunmesh-cli/relay"
 	"github.com/tarasglek/stunmesh-cli/sshc"
 )
 
@@ -66,20 +65,18 @@ func listen(args []string, p proc) int {
 	if err != nil {
 		return fail(p, "listen", err)
 	}
-	m, err := startMesh(p, cfg, 0)
+	n, err := openNode(p, cfg, 0)
 	if err != nil {
 		return fail(p, "listen", err)
 	}
-	defer m.Stop()
-	logf := func(format string, args ...any) { fmt.Fprintf(p.err, self+" listen: "+format+"\n", args...) }
+	defer n.Close()
 	for _, f := range specs {
-		ln, err := m.ListenTCP(f.Port)
+		stop, err := n.Listen(f)
 		if err != nil {
-			return fail(p, "listen", fmt.Errorf("%s:%d: %w", cfg.Prefix.Addr(), f.Port, err))
+			return fail(p, "listen", err)
 		}
-		defer ln.Close()
-		go func() { relay.Serve(ln, localDialer(m, cfg, f), logf) }()
-		logf("%s:%d -> %s", cfg.Prefix.Addr(), f.Port, f.Target())
+		defer stop()
+		fmt.Fprintf(p.err, "%s listen: %s:%d -> %s\n", self, cfg.Prefix.Addr(), f.Port, f.Target())
 	}
 	waitSignal()
 	return 0
