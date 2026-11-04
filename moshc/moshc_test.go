@@ -3,15 +3,12 @@
 package moshc
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
 	"net"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -55,52 +52,9 @@ func TestParseConnect(t *testing.T) {
 	}
 }
 
-func TestEscape(t *testing.T) {
-	for _, tc := range []struct {
-		feeds []string
-		out   string
-		quit  bool
-	}{
-		{[]string{"ls\r"}, "ls\r", false},
-		{[]string{"a\x1e.b"}, "a", true},
-		{[]string{"a\x1e", ".b"}, "a", true}, // split across reads
-		{[]string{"\x1e^"}, "\x1e", false},
-		{[]string{"\x1ex"}, "\x1ex", false},
-		{[]string{"\x1e\x1e."}, "\x1e.", false},           // Ctrl-^ Ctrl-^ is a literal Ctrl-^
-		{[]string{"\x1e", "\x1e", "\x1e."}, "\x1e", true}, // then a fresh escape quits
-	} {
-		var e Escape
-		var out []byte
-		quit := false
-		for _, f := range tc.feeds {
-			o, q := e.Feed([]byte(f))
-			out = append(out, o...)
-			if q {
-				quit = true
-				break
-			}
-		}
-		if string(out) != tc.out || quit != tc.quit {
-			t.Errorf("Feed(%q) = %q, %v; want %q, %v", tc.feeds, out, quit, tc.out, tc.quit)
-		}
-	}
-}
-
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
-
-// The applet's path against sshd-lite's own mosh server: bootstrap over an
-// SSH client, then the session on a datagram conn the caller dialed.
-func TestBootstrapConnect(t *testing.T) {
+// Bootstrap against sshd-lite's mosh server: over an SSH client, it starts
+// the server and returns a port where it answers and a well-formed key.
+func TestBootstrap(t *testing.T) {
 	key := func() (ed25519.PrivateKey, ssh.Signer) {
 		_, k, _ := ed25519.GenerateKey(rand.Reader)
 		s, _ := ssh.NewSignerFromKey(k)
@@ -138,24 +92,7 @@ func TestBootstrapConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	udp, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := &syncBuffer{}
-	s, err := mosh.Connect(ctx, udp, mkey, mosh.ClientConfig{Columns: 80, Rows: 24, Output: out})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if _, err := s.Write([]byte("echo MOSH_$((40+2))\n")); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(out.String(), "MOSH_42") {
-		if time.Now().After(deadline) {
-			t.Fatalf("no output: %q", out.String())
-		}
-		time.Sleep(20 * time.Millisecond)
+	if port == 0 || len(mkey) != 22 {
+		t.Errorf("Bootstrap = %d, %q", port, mkey)
 	}
 }

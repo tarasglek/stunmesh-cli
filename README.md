@@ -23,7 +23,7 @@ sm config attach build/sm-arm64 phone-cli/node.json sm-phone   # or attach one t
 export PATH=$PWD/build/bin:$PATH
 sm status -w 30s remote-01            # hosts table, live peer state
 sm ssh remote-01 -- uname -a          # SSH over the node, no system ssh needed
-sm mosh remote-02                   # Mosh over the node; Ctrl-^ . quits (mosh-server on the host)
+sm mosh remote-02                   # mosh-client over the node; Ctrl-^ . quits (mosh-server on the host)
 sm ssh -N -L 8080:127.0.0.1:80 -R 2222:127.0.0.1:22 remote-01   # forwards both ways
 sm listen 22:127.0.0.1:22             # every mesh peer reaches this device's sshd at its mesh address;
                                       # the target can be any host this device reaches
@@ -43,12 +43,13 @@ reads one from the file system instead. Names resolve from that table
 only, never DNS.
 `STUNMESH_CLI_LOG=info` shows the node's log on stderr.
 
-mosh needs mosh-server on the host. As with mosh, mosh-server runs
-without a network timeout: it stays until the session returns, quits
-(Ctrl-^ . or the shell exiting) or is killed, so a phone can sleep
-through a long outage. Unlike mosh, there is no local echo prediction
-and no "last contact" notice: while the network is down, typing shows
-nothing and appears once it is back.
+mosh needs mosh-client here and mosh-server on the host, as mosh does.
+sm starts mosh-server over SSH through the node, then runs mosh-client
+against a UDP relay on 127.0.0.1 whose other end is in the node, so the
+session is mosh's own: local echo prediction (`MOSH_PREDICTION_DISPLAY`),
+the "last contact" notice, Ctrl-^ . to quit. `sm mosh --client=PATH`
+picks the mosh-client to run. As with mosh, mosh-server runs without a
+network timeout, so a phone can sleep through a long outage.
 
 ## Build
 

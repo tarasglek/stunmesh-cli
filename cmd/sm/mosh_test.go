@@ -8,7 +8,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"io"
 	"net"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,40 +21,10 @@ import (
 	"github.com/jpillora/sshd-lite/mosh"
 	"github.com/jpillora/sshd-lite/sshd"
 	"github.com/tarasglek/stunmesh-cli/moshc"
+	"github.com/tarasglek/stunmesh-cli/relay"
 	"github.com/tarasglek/stunmesh-cli/sshc"
 	"golang.org/x/crypto/ssh"
 )
-
-func TestScreenTracker(t *testing.T) {
-	for _, tc := range []struct {
-		writes []string
-		alt    bool
-	}{
-		{[]string{"plain"}, false},
-		{[]string{"x\x1b[?1049hvim"}, true},
-		{[]string{"\x1b[?1049hvim\x1b[?1049lback"}, false},
-		{[]string{"\x1b[?10", "49hsplit"}, true}, // switch split across writes
-		{[]string{"\x1b[?1049h", "a", "b\x1b[?104", "9l"}, false},
-	} {
-		var out bytes.Buffer
-		tr := &screenTracker{w: &out}
-		for _, w := range tc.writes {
-			if n, err := tr.Write([]byte(w)); n != len(w) || err != nil {
-				t.Fatal(n, err)
-			}
-		}
-		if tr.alternate != tc.alt {
-			t.Errorf("%q: alternate = %v", tc.writes, tr.alternate)
-		}
-		if out.String() != strings.Join(tc.writes, "") {
-			t.Errorf("%q: passed on %q", tc.writes, out.String())
-		}
-		tr.restore()
-		if got := strings.HasSuffix(out.String(), altLeave) && !strings.HasSuffix(strings.Join(tc.writes, ""), altLeave); got != tc.alt {
-			t.Errorf("%q: restore wrote leave = %v", tc.writes, got)
-		}
-	}
-}
 
 // Bad arguments, -L/-R/-N and a stdin that is not a terminal fail before
 // the key or the network.
@@ -87,11 +59,17 @@ func (l *lockedBuffer) Write(p []byte) (int, error) {
 }
 func (l *lockedBuffer) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
 
-// runMosh end to end on a pty, against sshd-lite's embedded mosh server:
-// keys typed on the terminal reach the shell, Ctrl-^ . ends the session
-// with status 0, and the screen output starts by putting cursor keys in
-// application mode and ends by resetting the terminal's modes.
-func TestRunMosh(t *testing.T) {
+// The relay path end to end with the real mosh-client on a pty, against
+// sshd-lite's mosh server: mosh-client talks to the relay's loopback port
+// with the bootstrapped key, keys typed on the terminal reach the shell,
+// and Ctrl-^ . ends the client with status 0.
+func TestMoshClientThroughRelay(t *testing.T) {
+	client, err := exec.LookPath("mosh-client")
+	if err != nil {
+		t.Skip("mosh-client not installed")
+	}
+	t.Setenv("LANG", "C.UTF-8") // mosh-client wants a UTF-8 locale
+	t.Setenv("TERM", "xterm-256color")
 	_, hk, _ := ed25519.GenerateKey(rand.Reader)
 	hs, _ := ssh.NewSignerFromKey(hk)
 	_, uk, _ := ed25519.GenerateKey(rand.Reader)
@@ -126,10 +104,18 @@ func TestRunMosh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	udp, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+	// The relay as UDPRelay runs it, with the server on loopback in place
+	// of the mesh.
+	remote, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
 	if err != nil {
 		t.Fatal(err)
 	}
+	local, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	go relay.UDP(local, remote)
 
 	keyboard, tty, err := pty.Open()
 	if err != nil {
@@ -137,39 +123,40 @@ func TestRunMosh(t *testing.T) {
 	}
 	defer keyboard.Close()
 	defer tty.Close()
+	if err := pty.Setsize(keyboard, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
+		t.Fatal(err)
+	}
 	screen := &lockedBuffer{}
+	go func() { _, _ = io.Copy(screen, keyboard) }()
 	type result struct {
 		code int
 		err  error
 	}
 	res := make(chan result, 1)
 	go func() {
-		code, err := runMosh(udp, key, tty, screen, "xterm-256color", 80, 24)
+		code, err := runMoshClient(client, uint16(local.LocalAddr().(*net.UDPAddr).Port), key, tty, tty, tty)
 		res <- result{code, err}
 	}()
-	if _, err := keyboard.Write([]byte("echo MOSH_$((40+2))\r")); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(screen.String(), "MOSH_42") {
 		if time.Now().After(deadline) {
 			t.Fatalf("no output on the screen: %q", screen.String())
 		}
-		time.Sleep(20 * time.Millisecond)
+		// Typed until the shell is there to read it.
+		if _, err := keyboard.Write([]byte("echo MOSH_$((40+2))\r")); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	if _, err := keyboard.Write([]byte{moshc.EscapeKey, '.'}); err != nil {
+	if _, err := keyboard.Write([]byte{0x1e, '.'}); err != nil { // Ctrl-^ .
 		t.Fatal(err)
 	}
 	select {
 	case r := <-res:
 		if r.code != 0 || r.err != nil {
-			t.Errorf("runMosh after Ctrl-^ . = %d, %v", r.code, r.err)
+			t.Errorf("mosh-client after Ctrl-^ . = %d, %v", r.code, r.err)
 		}
-	case <-time.After(8 * time.Second):
-		t.Fatal("Ctrl-^ . did not end the session")
-	}
-	out := screen.String()
-	if !strings.HasPrefix(out, "\x1b[?1h") || !strings.HasSuffix(out, terminalModeReset) {
-		t.Errorf("screen output should start with DECCKM and end with the mode reset: %q ... %q", out[:min(len(out), 16)], out[max(0, len(out)-40):])
+	case <-time.After(10 * time.Second):
+		t.Fatal("Ctrl-^ . did not end mosh-client")
 	}
 }

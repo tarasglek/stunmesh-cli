@@ -7,23 +7,31 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
-	"github.com/jpillora/sshd-lite/mosh"
 	"github.com/tarasglek/stunmesh-cli/moshc"
 	"golang.org/x/term"
 )
 
-const moshUsage = "usage: %s mosh [-v] [-i identity]... [-p port] [-l user] [user@]host [command...]\n"
+const moshUsage = "usage: %s mosh [--client=PATH (first)] [-v] [-i identity]... [-p port] [-l user] [user@]host [command...]\n"
 
 // moshApplet runs a Mosh session to a mesh host through the userspace
-// node: mosh-server is started over SSH, then the session runs over UDP
-// through the node, surviving network changes as mosh does. Ctrl-^ . quits.
+// node: mosh-server is started over SSH, then mosh's own mosh-client
+// talks to it through a UDP relay on 127.0.0.1 whose other end is in the
+// node, as ssh talks through nc. --client names the mosh-client to run,
+// as for mosh. The node lives as long as mosh-client does.
 func moshApplet(args []string, p proc) int {
+	client := "mosh-client"
+	if len(args) > 0 {
+		if v, ok := strings.CutPrefix(args[0], "--client="); ok {
+			client, args = v, args[1:]
+		}
+	}
 	a, err := parseSSHArgs(args, defaultUser(p))
 	if err == nil && (len(a.local) > 0 || len(a.remote) > 0 || a.noCommand) {
 		err = errors.New("mosh takes no -L, -R or -N")
@@ -35,6 +43,9 @@ func moshApplet(args []string, p proc) int {
 	in, isFile := p.in.(*os.File)
 	if !isFile || !term.IsTerminal(int(in.Fd())) {
 		return fail(p, "mosh", errors.New("stdin is not a terminal"))
+	}
+	if client, err = exec.LookPath(client); err != nil {
+		return fail(p, "mosh", err)
 	}
 	cfg, err := nodeConfig(p)
 	if err != nil {
@@ -65,137 +76,64 @@ func moshApplet(args []string, p proc) int {
 	if err != nil {
 		cols, rows = 80, 24
 	}
-	termName := p.getenv("TERM")
 	c, err := dialSSH(p, m, a, clientCfg, dialTimeout, dbg)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), moshc.BootstrapTimeout)
-	port, key, err := moshc.Bootstrap(ctx, c, moshc.Server{Term: termName, Columns: cols, Rows: rows, Command: a.args})
+	port, key, err := moshc.Bootstrap(ctx, c, moshc.Server{Term: p.getenv("TERM"), Columns: cols, Rows: rows, Command: a.args})
 	c.Close() // the session needs no SSH from here on
 	cancel()
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
-	dbg("mosh-server is up on port %d; session over UDP through the mesh", port)
-	udp, err := m.DialUDP(a.host, port)
+	local, stop, err := m.UDPRelay(a.host, port)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
-	code, err := runMosh(udp, key, in, p.out, termName, cols, rows)
+	defer stop()
+	dbg("mosh-server is up on port %d; %s talks to it through 127.0.0.1:%d", port, client, local)
+	code, err := runMoshClient(client, local, key, in, p.out, p.err)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
 	return code
 }
 
-// terminalModeReset undoes modes a remote program may have left set:
-// cursor keys, attributes, reverse video, cursor visibility, mouse
-// reporting and bracketed paste, as sshd-lite's mosh client resets them.
-const terminalModeReset = "\x1b[?1l\x1b[0m\x1b[?5l\x1b[?25h\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?2004l"
-
-// runMosh runs the session on udp with in as the keyboard in raw mode and
-// out as the screen, until the remote shell exits or the user types
-// Ctrl-^ ., which shuts the server down too. Cursor keys are put in
-// application mode, as standard Mosh expects, and every mode is reset on
-// the way out.
-func runMosh(udp net.Conn, key string, in *os.File, out io.Writer, termName string, cols, rows int) (int, error) {
-	state, err := term.MakeRaw(int(in.Fd()))
-	if err != nil {
-		udp.Close()
+// runMoshClient runs mosh-client on the terminal against 127.0.0.1:port
+// with the session key in MOSH_KEY, as the mosh script does, and returns
+// its exit status. Ctrl-^ . and the terminal are mosh-client's. Signals
+// that would end this process are passed on instead, so the relay
+// outlives the client that uses it.
+func runMoshClient(client string, port uint16, key string, in *os.File, out, errw io.Writer) (int, error) {
+	cmd := exec.Command(client, "127.0.0.1", strconv.Itoa(int(port)))
+	cmd.Env = append(os.Environ(), "MOSH_KEY="+key)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errw
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
+	if err := cmd.Start(); err != nil {
 		return 1, err
 	}
-	defer term.Restore(int(in.Fd()), state)
-	screen := &screenTracker{w: out}
-	defer io.WriteString(out, terminalModeReset)
-	defer screen.restore()
-	if _, err := io.WriteString(out, "\x1b[?1h"); err != nil {
-		udp.Close()
-		return 1, err
-	}
-	if termName == "" {
-		termName = "xterm-256color"
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	s, err := mosh.Connect(ctx, udp, key, mosh.ClientConfig{Term: termName, Columns: cols, Rows: rows, Output: screen})
-	if err != nil {
-		return 1, err
-	}
-	defer s.Close()
-
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-	defer func() {
-		signal.Stop(winch)
-		close(winch)
-	}()
+	done := make(chan struct{})
 	go func() {
-		for range winch {
-			if c, r, err := term.GetSize(int(in.Fd())); err == nil {
-				_ = s.Resize(c, r)
-			}
-		}
-	}()
-	quit := make(chan struct{})
-	go func() {
-		var esc moshc.Escape
-		b := make([]byte, 4096)
 		for {
-			n, err := in.Read(b)
-			keys, q := esc.Feed(b[:n])
-			if len(keys) > 0 {
-				if _, werr := s.Write(keys); werr != nil {
-					return
-				}
-			}
-			if q {
-				close(quit)
-				cancel() // the session sends mosh-server its shutdown
-				return
-			}
-			if err != nil {
+			select {
+			case s := <-sigs:
+				_ = cmd.Process.Signal(s)
+			case <-done:
 				return
 			}
 		}
 	}()
-	code, err := s.Wait()
-	select {
-	case <-quit:
-		return 0, nil
-	default:
+	err := cmd.Wait()
+	close(done)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), nil
 	}
-	return code, err
-}
-
-// screenTracker passes the session's screen output on and remembers
-// whether it left the terminal on the alternate screen, so restore can
-// go back to the primary one; the switch may be split across writes.
-type screenTracker struct {
-	w         io.Writer
-	tail      string
-	alternate bool
-}
-
-const altEnter, altLeave = "\x1b[?1049h", "\x1b[?1049l"
-
-func (t *screenTracker) Write(p []byte) (int, error) {
-	n, err := t.w.Write(p)
-	data := t.tail + string(p[:n])
-	enter, leave := strings.LastIndex(data, altEnter), strings.LastIndex(data, altLeave)
-	if enter >= 0 || leave >= 0 {
-		t.alternate = enter > leave
+	if err != nil {
+		return 1, err
 	}
-	if keep := len(altEnter) - 1; len(data) > keep {
-		data = data[len(data)-keep:]
-	}
-	t.tail = data
-	return n, err
-}
-
-func (t *screenTracker) restore() {
-	if t.alternate {
-		_, _ = io.WriteString(t.w, altLeave)
-		t.alternate = false
-	}
+	return 0, nil
 }

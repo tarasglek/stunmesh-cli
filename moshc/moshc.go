@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 // Package moshc starts Mosh sessions over the userspace mesh: mosh-server
-// is bootstrapped over an SSH client of the caller's, and the session's
-// datagrams go to sshd-lite's mosh.Connect on a conn the caller dials,
-// through the mesh rather than the host's network.
+// is bootstrapped over an SSH client of the caller's, which gets the port
+// and key a mosh client needs.
 package moshc
 
 import (
