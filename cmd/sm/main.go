@@ -39,6 +39,7 @@ type applet func(args []string, p proc) int
 var applets = map[string]applet{
 	"config": configApplet,
 	"keygen": keygen,
+	"status": status,
 }
 
 // fail reports an applet's error the way every applet does.
