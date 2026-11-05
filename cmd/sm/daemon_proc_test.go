@@ -4,18 +4,23 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tarasglek/stunmesh-cli/mesh"
 )
 
 // With $SM_TEST_EXEC=1 the test binary is sm, so the tests can run sm as
-// processes.
+// processes, and sm can start its daemon from os.Executable.
 func TestMain(m *testing.M) {
 	if os.Getenv("SM_TEST_EXEC") == "1" {
 		os.Exit(run(os.Args, osProc()))
@@ -43,11 +48,141 @@ func procConfig(name string, i, port, peerPort int, peerPub [32]byte) []byte {
 	return b
 }
 
+func freeUDPPort(t *testing.T) int {
+	t.Helper()
+	c, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).Port
+}
+
 func fill(b byte) (k [32]byte) {
 	for i := range k {
 		k[i] = b
 	}
 	return k
+}
+
+// sm processes against a real node: pb runs in this test, pa is sm's,
+// its daemon a process. Two clients at once start one daemon and share
+// it; sm down stops it; one killed leaves its socket, and the next client
+// replaces it; a daemon with no clients exits after -idle.
+func TestDaemonProcesses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs sm processes and a WireGuard node")
+	}
+	privA, privB := fill(1), fill(2)
+	portA, portB := freeUDPPort(t), freeUDPPort(t)
+	cfgB, err := mesh.ParseConfig(procConfig("pb", 1, portB, portA, mesh.PublicKey(privA)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := mesh.Start(cfgB, privB, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop()
+	ln, err := b.ListenTCP(22)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				msg, _ := io.ReadAll(c)
+				_, _ = c.Write(append([]byte("got "), msg...))
+			}()
+		}
+	}()
+
+	dir := t.TempDir()
+	cfgA := filepath.Join(dir, "pa.json")
+	if err := os.WriteFile(cfgA, procConfig("pa", 0, portA, portB, mesh.PublicKey(privB)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "key"), []byte(mesh.FormatKey(privA)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "sm.sock")
+	sm := func(args ...string) *exec.Cmd { return smProc(t, dir, cfgA, args...) }
+	nc := func(msg string) {
+		t.Helper()
+		c := sm("nc", "pb", "22")
+		c.Stdin = strings.NewReader(msg)
+		var errb strings.Builder
+		c.Stderr = &errb
+		out, err := c.Output()
+		if err != nil || string(out) != "got "+msg {
+			t.Errorf("nc %q: %q, %v %s", msg, out, err, errb.String())
+		}
+	}
+	down := func() {
+		t.Helper()
+		if out, err := sm("down").CombinedOutput(); err != nil {
+			t.Fatalf("sm down: %v %s", err, out)
+		}
+		if _, err := os.Stat(sock); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("socket after sm down: %v", err)
+		}
+	}
+	defer sm("down").Run()
+
+	var wg sync.WaitGroup
+	for i := range 2 {
+		wg.Go(func() { nc(fmt.Sprintf("client %d", i)) })
+	}
+	wg.Wait()
+	log, _ := os.ReadFile(filepath.Join(dir, "sm.log"))
+	if n := strings.Count(string(log), "sm daemon: serving"); n != 1 {
+		t.Errorf("%d daemons served:\n%s", n, log)
+	}
+	nc("warm")
+	down()
+
+	// A daemon killed outright leaves its socket behind.
+	d := sm("daemon")
+	if err := d.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the daemon's socket", func() bool { _, err := os.Stat(sock); return err == nil })
+	d.Process.Kill()
+	d.Wait()
+	if _, err := os.Stat(sock); err != nil {
+		t.Fatalf("no stale socket to recover from: %v", err)
+	}
+	nc("after a crash")
+	down()
+
+	d = sm("daemon", "-idle", "500ms")
+	var derr strings.Builder
+	d.Stderr = &derr
+	if err := d.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the daemon's socket", func() bool { _, err := os.Stat(sock); return err == nil })
+	nc("before idle")
+	exited := make(chan error, 1)
+	go func() { exited <- d.Wait() }()
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Errorf("idle daemon: %v %s", err, derr.String())
+		}
+	case <-time.After(10 * time.Second):
+		d.Process.Kill()
+		t.Fatal("daemon did not exit when idle")
+	}
+	if _, err := os.Stat(sock); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("socket after idle exit: %v", err)
+	}
 }
 
 // smProc runs the test binary as sm with dir as its runtime directory

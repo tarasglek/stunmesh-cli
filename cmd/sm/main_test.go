@@ -44,7 +44,8 @@ func TestPick(t *testing.T) {
 }
 
 // testProc is a process with environment env, no stdin and the node
-// config in env["config"], if any.
+// config in env["config"], if any. Its node is in the process, as with
+// $STUNMESH_CLI_DAEMON=off, unless env says otherwise.
 func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
 	config := func() ([]byte, error) {
 		if c, ok := env["config"]; ok {
@@ -54,8 +55,13 @@ func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
 	}
 	return proc{
 		in: strings.NewReader(""), out: out, err: errb,
-		getenv: func(k string) string { return env[k] },
-		rand:   rand.Reader, config: config,
+		getenv: func(k string) string {
+			if v, ok := env[k]; ok || k != "STUNMESH_CLI_DAEMON" {
+				return v
+			}
+			return "off"
+		},
+		rand: rand.Reader, config: config,
 		sshConfig: func() ([]byte, error) {
 			if c, ok := env["ssh_config"]; ok {
 				return []byte(c), nil

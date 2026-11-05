@@ -404,3 +404,31 @@ func TestDaemonClientRetry(t *testing.T) {
 		t.Errorf("Peers after a dropped connection = %v, %v", peers, err)
 	}
 }
+
+// A daemon this client started that exits with the lock free failed; the
+// client says so at once, pointing at the log, instead of waiting out
+// startTimeout.
+func TestConnectDaemonExits(t *testing.T) {
+	dir := t.TempDir()
+	starts := 0
+	d := &daemonClient{sock: filepath.Join(dir, "sm.sock"), lock: filepath.Join(dir, "sm.lock"), log: "LOG",
+		start: func() (<-chan struct{}, error) {
+			starts++
+			c := make(chan struct{})
+			close(c)
+			return c, nil
+		}}
+	start := time.Now()
+	_, err := d.connect(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "exited before serving; see LOG") || starts != 1 || time.Since(start) > time.Second {
+		t.Errorf("connect = %v after %d starts, %v", err, starts, time.Since(start))
+	}
+}
+
+// Under the daemon too, a missing key is reported before anything starts.
+func TestDaemonClientNoKey(t *testing.T) {
+	env := map[string]string{"config": testConfig, "STUNMESH_CLI_KEY": t.TempDir() + "/key", "STUNMESH_CLI_DAEMON": "on", "XDG_RUNTIME_DIR": t.TempDir()}
+	if code, _, errs := runEnv(env, "sm", "nc", "remote-01", "22"); code != 1 || !strings.Contains(errs, "run sm keygen") {
+		t.Errorf("nc without a key: %d %q", code, errs)
+	}
+}

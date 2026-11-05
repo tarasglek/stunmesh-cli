@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,7 +23,8 @@ import (
 	"github.com/tarasglek/stunmesh-cli/mesh"
 )
 
-// startTimeout bounds waiting for a daemon to stop.
+// startTimeout bounds waiting for a daemon to serve, including one that
+// is still stopping and holds the lock.
 const startTimeout = 10 * time.Second
 
 // daemonClient is the node of sm daemon, reached on its socket. Each
@@ -29,19 +32,109 @@ const startTimeout = 10 * time.Second
 // stream and for a relay says by being open that the client still
 // wants it.
 type daemonClient struct {
-	cfg  mesh.Config
-	sock string
-	id   string // Sm-Node
+	cfg             mesh.Config
+	sock, lock, log string
+	id              string // Sm-Node
+	// start, if not nil, starts a daemon when none holds the lock and
+	// returns a channel closed when it exits.
+	start func() (<-chan struct{}, error)
 }
 
-// connect connects to the daemon.
-func (d *daemonClient) connect(ctx context.Context) (*net.UnixConn, error) {
-	var dl net.Dialer
-	c, err := dl.DialUnix(ctx, "unix", nil, &net.UnixAddr{Name: d.sock, Net: "unix"})
+// newDaemonClient is a client of the daemon for p's node config and key,
+// which starts one as p would: the same executable and config. The key
+// is read here, so a missing or unreadable one is reported as it is
+// without the daemon, not from a daemon that could not start.
+func newDaemonClient(p proc, cfg mesh.Config) (*daemonClient, error) {
+	b, err := p.config()
 	if err != nil {
-		return nil, fmt.Errorf("sm daemon: %w", err)
+		return nil, err
 	}
-	return c, nil
+	priv, err := loadKey(p)
+	if err != nil {
+		return nil, err
+	}
+	sock, lock, log, err := daemonPaths(p.getenv)
+	if err != nil {
+		return nil, err
+	}
+	return &daemonClient{cfg: cfg, sock: sock, lock: lock, log: log, id: nodeID(b, priv),
+		start: func() (<-chan struct{}, error) {
+			exe, err := os.Executable()
+			if err != nil {
+				return nil, err
+			}
+			return startDaemon(exe, p.configFile)
+		}}, nil
+}
+
+// startDaemon starts exe as sm daemon -bg, detached from this process's
+// session and directory, and returns a channel closed when it exits.
+func startDaemon(exe, configFile string) (<-chan struct{}, error) {
+	args := []string{self}
+	if configFile != "" {
+		abs, err := filepath.Abs(configFile)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--config", abs)
+	}
+	cmd := &exec.Cmd{Path: exe, Args: append(args, "daemon", "-bg"), Dir: "/",
+		SysProcAttr: &syscall.SysProcAttr{Setsid: true}}
+	// The daemon outlives this process, so it must not keep descriptors
+	// this one inherited, such as a pipe whose reader waits for EOF.
+	closeOnExec()
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
+	return exited, nil
+}
+
+// closeOnExec marks every descriptor but stdio close-on-exec.
+func closeOnExec() {
+	ents, _ := os.ReadDir("/proc/self/fd")
+	for _, e := range ents {
+		if fd, err := strconv.Atoi(e.Name()); err == nil && fd > 2 {
+			syscall.CloseOnExec(fd)
+		}
+	}
+}
+
+// connect connects to the daemon, starting one if none holds the lock;
+// the daemon is ready when its socket answers. One that holds the lock
+// but does not serve is starting or stopping: wait for it. One this
+// process started that exits while the lock is free failed: its log
+// says why.
+func (d *daemonClient) connect(ctx context.Context) (*net.UnixConn, error) {
+	deadline := time.Now().Add(startTimeout)
+	pause := 10 * time.Millisecond
+	var exited <-chan struct{}
+	for {
+		var dl net.Dialer
+		c, err := dl.DialUnix(ctx, "unix", nil, &net.UnixAddr{Name: d.sock, Net: "unix"})
+		if err == nil {
+			return c, nil
+		}
+		if d.start == nil || !(errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)) || time.Now().After(deadline) {
+			return nil, fmt.Errorf("sm daemon: %w", err)
+		}
+		select {
+		case <-exited: // nil until started: never ready
+			if lockFree(d.lock) {
+				return nil, fmt.Errorf("sm daemon exited before serving; see %s", d.log)
+			}
+			exited = nil // another one won the lock
+		default:
+		}
+		if exited == nil && lockFree(d.lock) {
+			if exited, err = d.start(); err != nil {
+				return nil, fmt.Errorf("starting sm daemon: %w", err)
+			}
+		}
+		time.Sleep(pause)
+		pause = min(2*pause, 200*time.Millisecond)
+	}
 }
 
 // lockFree reports whether no daemon holds the lock at path.

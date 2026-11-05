@@ -73,8 +73,8 @@ func moshApplet(args []string, p proc) int {
 	dbg := debugf(p, "mosh", verbose)
 	dbg("%s is %s in the hosts table", host, addr)
 
-	// First, so that this node is up only after ssh's sm nc has let the
-	// peer go: two nodes with one key would reset each other's sessions.
+	// First, so that an in-process node (STUNMESH_CLI_DAEMON=off) is up
+	// only after ssh's sm nc has let the peer go.
 	ctx, cancel := context.WithTimeout(context.Background(), moshc.BootstrapTimeout)
 	port, key, err := bootstrap(ctx, "ssh", moshSSHArgs(dest, command, verbose), bootstrapEnv(p), p.err)
 	cancel()
@@ -111,8 +111,8 @@ func moshSSHArgs(dest string, command []string, verbose int) []string {
 }
 
 // bootstrapEnv is ssh's environment: this one, plus the node config file
-// sm was given, if any, so that ssh's sm nc runs the same node config as
-// this sm.
+// sm was given, if any, so that ssh's sm nc serves from the same node as
+// this sm; were they to differ, the daemon would refuse one of them.
 func bootstrapEnv(p proc) []string {
 	env := os.Environ()
 	if p.configFile != "" {
