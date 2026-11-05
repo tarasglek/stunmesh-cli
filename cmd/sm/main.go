@@ -39,6 +39,8 @@ type applet func(args []string, p proc) int
 
 var applets = map[string]applet{
 	"config": configApplet,
+	"daemon": daemonApplet,
+	"down":   downApplet,
 	"keygen": keygen,
 	"mosh":   moshApplet,
 	"nc":     nc,
