@@ -8,10 +8,12 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"sync"
 	"time"
 
 	_ "github.com/tarasglek/stunmesh-avahi/lease" // the client's peers use lease
 	"github.com/tarasglek/stunmesh-avahi/wgdev"
+	"github.com/tarasglek/stunmesh-cli/relay"
 	_ "github.com/tjjh89017/stunmesh-go/builtin/all" // the plugins nodes may name
 	"github.com/tjjh89017/stunmesh-go/userspace"
 	"golang.zx2c4.com/wireguard/tun"
@@ -30,6 +32,9 @@ type Mesh struct {
 	dev        backend
 	net        *netstack.Net
 	unregister func()
+
+	mu     sync.Mutex
+	relays map[net.PacketConn]struct{} // UDPRelay's open sockets
 }
 
 // Start brings the node up with the device's private key: a netstack on
@@ -71,7 +76,7 @@ func Start(cfg Config, priv [32]byte, log Logger) (*Mesh, error) {
 		unregister()
 		return nil, err
 	}
-	return &Mesh{cfg: cfg, node: node, dev: dev, net: tnet, unregister: unregister}, nil
+	return &Mesh{cfg: cfg, node: node, dev: dev, net: tnet, unregister: unregister, relays: map[net.PacketConn]struct{}{}}, nil
 }
 
 // Config is the node config the mesh runs.
@@ -93,6 +98,34 @@ func (m *Mesh) DialUDP(host string, port uint16) (net.Conn, error) {
 		return nil, err
 	}
 	return m.net.DialUDPAddrPort(netip.AddrPort{}, netip.AddrPortFrom(a, port))
+}
+
+// UDPRelay forwards datagrams between a new UDP port on 127.0.0.1 and
+// port on a mesh host, for a program with its own UDP client, such as
+// mosh-client: it sends to 127.0.0.1 and the returned port, and its
+// datagrams leave through the node. relay.UDP says whose datagrams are
+// taken. The relay runs until stop, which is idempotent, or Stop.
+func (m *Mesh) UDPRelay(host string, port uint16) (localPort uint16, stop func(), err error) {
+	remote, err := m.DialUDP(host, port)
+	if err != nil {
+		return 0, nil, err
+	}
+	local, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		remote.Close()
+		return 0, nil, err
+	}
+	m.mu.Lock()
+	m.relays[local] = struct{}{}
+	m.mu.Unlock()
+	go relay.UDP(local, remote)
+	stop = func() {
+		m.mu.Lock()
+		delete(m.relays, local)
+		m.mu.Unlock()
+		local.Close() // relay.UDP closes the mesh side
+	}
+	return uint16(local.LocalAddr().(*net.UDPAddr).Port), stop, nil
 }
 
 // ListenTCP listens on port of the node's tunnel address, for connections
@@ -131,13 +164,19 @@ func peerStatus(cfg Config, d wgdev.Device) []PeerStatus {
 	return out
 }
 
-// Stop takes the node down, then its device out of wgdev. The order
-// mirrors Start's: while the node stops, the device stays registered and
-// answers "node not running", so lease falls through to its inner store;
-// unregistered, the name would fall through to netlink and a kernel
-// interface of the same name. Once node.Stop returns, lease is closed and
+// Stop closes UDPRelay's relays, takes the node down, then its device out
+// of wgdev. The order mirrors Start's: while the node stops, the device
+// stays registered and answers "node not running", so lease falls through
+// to its inner store; unregistered, the name would fall through to netlink
+// and a kernel interface of the same name. Once node.Stop returns, lease is closed and
 // has waited for its watches, so nothing calls wgdev for the name again.
 func (m *Mesh) Stop() {
+	m.mu.Lock()
+	for r := range m.relays {
+		r.Close() // relay.UDP closes the mesh side
+	}
+	clear(m.relays)
+	m.mu.Unlock()
 	m.node.Stop()
 	m.unregister()
 }

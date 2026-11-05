@@ -159,6 +159,69 @@ func TestMeshDialByName(t *testing.T) {
 	}
 }
 
+// A program on this host reaches a UDP service on B through A's relay, as
+// mosh-client reaches mosh-server; stop, and Stop for the relays still
+// open, free their ports.
+func TestMeshUDPRelay(t *testing.T) {
+	a, b := startPair(t)
+	pc, err := b.net.ListenUDPAddrPort(netip.MustParseAddrPort("10.99.0.2:60002"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = pc.WriteTo(append([]byte("echo "), buf[:n]...), from)
+		}
+	}()
+
+	port, _, err := a.UDPRelay("pb", 60002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	// The first datagram may go while the handshake is still on.
+	buf := make([]byte, 1500)
+	var n int
+	for i := 0; ; i++ {
+		if _, err := c.Write([]byte("via the relay")); err != nil {
+			t.Fatal(err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		if n, err = c.Read(buf); err == nil {
+			break
+		}
+		if i == 20 {
+			t.Fatalf("no answer through the relay: %v", err)
+		}
+	}
+	if string(buf[:n]) != "echo via the relay" {
+		t.Fatalf("got %q", buf[:n])
+	}
+	if _, _, err := a.UDPRelay("nosuch", 1); err == nil {
+		t.Error("relay to an unknown host")
+	}
+
+	other, stop, err := a.UDPRelay("pb", 60002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	stop()
+	portFree(t, other, "stop")
+	a.Stop()
+	portFree(t, port, "Stop")
+}
+
 func portFree(t *testing.T, port uint16, after string) {
 	t.Helper()
 	free, err := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
