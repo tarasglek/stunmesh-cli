@@ -5,10 +5,21 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"io/fs"
 	"slices"
 	"strings"
 	"testing"
 )
+
+// testConfig is a node config as gen.py renders it.
+const testConfig = `{
+  "name": "desk-cli",
+  "interface": {"addresses": ["10.200.0.8/24"], "listen_port": 51820},
+  "peers": [{"name": "remote-01", "public_key": "7NkaedCuhiw0u6VLDY1xm4ywp+eZLYUT643Ry53LF04=", "allowed_ips": ["10.200.0.5/32"]},
+            {"name": "lap1", "public_key": "WB3BdFtSnifYp3B+mU0Wy5lN4+FevBQs6C+rk7/ouD0=", "allowed_ips": ["10.200.0.2/32"]}],
+  "domain": "mesh.internal",
+  "hosts": {"remote-01": "10.200.0.5", "lap1": "10.200.0.2", "desk-cli": "10.200.0.8"}
+}`
 
 func TestPick(t *testing.T) {
 	for _, tc := range []struct {
@@ -32,11 +43,25 @@ func TestPick(t *testing.T) {
 	}
 }
 
-// testProc is a process with environment env and no stdin.
+// testProc is a process with environment env, no stdin and the node
+// config in env["config"], if any.
 func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
+	config := func() ([]byte, error) {
+		if c, ok := env["config"]; ok {
+			return []byte(c), nil
+		}
+		return nil, errNoConfig
+	}
 	return proc{
 		in: strings.NewReader(""), out: out, err: errb,
-		getenv: func(k string) string { return env[k] }, rand: rand.Reader,
+		getenv: func(k string) string { return env[k] },
+		rand:   rand.Reader, config: config,
+		sshConfig: func() ([]byte, error) {
+			if c, ok := env["ssh_config"]; ok {
+				return []byte(c), nil
+			}
+			return nil, fs.ErrNotExist
+		},
 	}
 }
 
@@ -49,7 +74,7 @@ func runEnv(env map[string]string, argv ...string) (int, string, string) {
 func runCapture(argv ...string) (int, string, string) { return runEnv(nil, argv...) }
 
 func TestRun(t *testing.T) {
-	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "keygen\n" {
+	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "config\nkeygen\n" {
 		t.Errorf("--list: %d %q", code, out)
 	}
 	if code, out, _ := runCapture("sm", "--version"); code != 0 || !strings.HasPrefix(out, "sm ") {
