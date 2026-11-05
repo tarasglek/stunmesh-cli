@@ -1,11 +1,12 @@
 # stunmesh-cli
 
-One static binary, `sm`, that joins a [stunmesh-go](https://github.com/tjjh89017/stunmesh-go)
+One binary, `sm`, that joins a [stunmesh-go](https://github.com/tjjh89017/stunmesh-go)
 WireGuard mesh in userspace, without a VPN, a tun device or root, and
 carries the system's OpenSSH and Mosh to the mesh's hosts.
 
 ```sh
-make check    # tidy, vet, test, build build/sm-<arch>
+make check    # tidy, vet, test, build build/sm-linux-<arch>
+make build GOOS=android GOARCH=arm64   # for Termux on a phone
 ```
 
 Tests start WireGuard nodes and bind ports; run them in a network

@@ -30,7 +30,7 @@ func TestPick(t *testing.T) {
 		{[]string{"/x/build/bin/mosh", "desk"}, "mosh", []string{"desk"}},
 		{[]string{"sm", "mosh", "desk"}, "mosh", []string{"desk"}},
 		{[]string{"./build/sm", "nc", "desk", "22"}, "nc", []string{"desk", "22"}},
-		{[]string{"build/sm-desk-cli-amd64", "status"}, "status", nil},
+		{[]string{"build/sm-desk-cli-linux-amd64", "status"}, "status", nil},
 		{[]string{"sm"}, "", nil},
 		{[]string{"/usr/bin/stunmesh-cli", "nc"}, "stunmesh-cli", []string{"nc"}}, // any other name is an applet's
 		{[]string{"smash", "x"}, "smash", []string{"x"}},                          // a prefix of sm- only

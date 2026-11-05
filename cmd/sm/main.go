@@ -56,7 +56,7 @@ func pick(argv []string) (string, []string) {
 	if len(argv) == 0 {
 		return "", nil
 	}
-	// Build artifacts are named sm-<node>-<arch>; they are still the
+	// Build artifacts are named sm-<node>-<os>-<arch>; they are still the
 	// binary itself, not an applet.
 	if name := filepath.Base(argv[0]); name != self && !strings.HasPrefix(name, self+"-") {
 		return name, argv[1:]
