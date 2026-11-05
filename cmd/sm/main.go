@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+// Command sm is stunmesh-cli's multi-call binary, like busybox: the applet
+// is the basename it runs as (a symlink named mosh runs the mosh applet),
+// else its first argument when run as sm or sm-*: sm nc, sm mosh.
+package main
+
+import (
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+)
+
+// version is stamped by the Makefile.
+var version = "dev"
+
+const self = "sm"
+
+// proc is what an applet may touch of the process, so tests can run one
+// without it.
+type proc struct {
+	in       io.Reader
+	out, err io.Writer
+	getenv   func(string) string
+}
+
+type applet func(args []string, p proc) int
+
+var applets = map[string]applet{}
+
+// fail reports an applet's error the way every applet does.
+func fail(p proc, applet string, err error) int {
+	fmt.Fprintf(p.err, "%s %s: %v\n", self, applet, err)
+	return 1
+}
+
+// pick splits argv into the applet name and its arguments.
+func pick(argv []string) (string, []string) {
+	if len(argv) == 0 {
+		return "", nil
+	}
+	// Build artifacts are named sm-<node>-<arch>; they are still the
+	// binary itself, not an applet.
+	if name := filepath.Base(argv[0]); name != self && !strings.HasPrefix(name, self+"-") {
+		return name, argv[1:]
+	}
+	if len(argv) == 1 {
+		return "", nil
+	}
+	return argv[1], argv[2:]
+}
+
+func run(argv []string, p proc) int {
+	name, args := pick(argv)
+	if name == "--version" {
+		fmt.Fprintln(p.out, self, version)
+		return 0
+	}
+	if name == "--list" {
+		for _, n := range slices.Sorted(maps.Keys(applets)) {
+			fmt.Fprintln(p.out, n)
+		}
+		return 0
+	}
+	a, ok := applets[name]
+	if !ok { // 127, as busybox and the shell exit for a missing command
+		if name != "" {
+			fmt.Fprintf(p.err, "%s: unknown applet %q\n", self, name)
+		}
+		fmt.Fprintf(p.err, "usage: %s <applet> [args...]; %s --list shows applets\n", self, self)
+		return 127
+	}
+	return a(args, p)
+}
+
+func main() { os.Exit(run(os.Args, osProc())) }
+
+// osProc is this process.
+func osProc() proc {
+	return proc{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv}
+}
