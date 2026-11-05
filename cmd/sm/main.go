@@ -6,6 +6,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 	"io"
 	"maps"
@@ -26,11 +27,14 @@ type proc struct {
 	in       io.Reader
 	out, err io.Writer
 	getenv   func(string) string
+	rand     io.Reader
 }
 
 type applet func(args []string, p proc) int
 
-var applets = map[string]applet{}
+var applets = map[string]applet{
+	"keygen": keygen,
+}
 
 // fail reports an applet's error the way every applet does.
 func fail(p proc, applet string, err error) int {
@@ -81,5 +85,5 @@ func main() { os.Exit(run(os.Args, osProc())) }
 
 // osProc is this process.
 func osProc() proc {
-	return proc{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv}
+	return proc{in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, rand: rand.Reader}
 }

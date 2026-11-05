@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"slices"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestPick(t *testing.T) {
 func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
 	return proc{
 		in: strings.NewReader(""), out: out, err: errb,
-		getenv: func(k string) string { return env[k] },
+		getenv: func(k string) string { return env[k] }, rand: rand.Reader,
 	}
 }
 
@@ -48,7 +49,7 @@ func runEnv(env map[string]string, argv ...string) (int, string, string) {
 func runCapture(argv ...string) (int, string, string) { return runEnv(nil, argv...) }
 
 func TestRun(t *testing.T) {
-	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "" {
+	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "keygen\n" {
 		t.Errorf("--list: %d %q", code, out)
 	}
 	if code, out, _ := runCapture("sm", "--version"); code != 0 || !strings.HasPrefix(out, "sm ") {
