@@ -20,6 +20,8 @@ github.com/mikioh/ipaddr v0.0.0-20190404000644-d465c8ab6721 h1:RlZweED6sbSArvlE9
 github.com/mikioh/ipaddr v0.0.0-20190404000644-d465c8ab6721/go.mod h1:Ickgr2WtCLZ2MDGd4Gr0geeCH5HybhRJbonOgQpvSxc=
 github.com/rs/zerolog v1.35.1 h1:m7xQeoiLIiV0BCEY4Hs+j2NG4Gp2o2KPKmhnnLiazKI=
 github.com/rs/zerolog v1.35.1/go.mod h1:EjML9kdfa/RMA7h/6z6pYmq1ykOuA8/mjWaEvGI+jcw=
+github.com/tarasglek/stunmesh-avahi v0.3.1-0.20261103170919-5733c6d0f27b h1:evjx98onm+ASY2xT7vU4UZe3xard8CWxre4rP8GHMw4=
+github.com/tarasglek/stunmesh-avahi v0.3.1-0.20261103170919-5733c6d0f27b/go.mod h1:5ACs6sBFgtqdhy0UID7JzO6Q19DZT7gicbdiAPobAQc=
 github.com/tjjh89017/stunmesh-go v1.16.1-0.20261105011442-924e85ff5da3 h1:L4x7oG0PrF3UgP5iXB9ofjvpi9NVxGc83l5oq0otqaE=
 github.com/tjjh89017/stunmesh-go v1.16.1-0.20261105011442-924e85ff5da3/go.mod h1:gqqfC2f1tOXrBRJaI1qJhMlZC2yVM0ACI4zIzXgmCVg=
 go.uber.org/mock v0.6.0 h1:hyF9dfmbgIX5EfOdasqLsWD6xqpNZlXblLB/Dbnwv3Y=
