@@ -28,8 +28,9 @@ type proc struct {
 	out, err io.Writer
 	getenv   func(string) string
 	rand     io.Reader
-	// config is the node config compiled in, or read from a file.
-	config func() ([]byte, error)
+	// config is the node config compiled in, or read from configFile.
+	config     func() ([]byte, error)
+	configFile string
 	// sshConfig is the ssh_config that came with the node config.
 	sshConfig func() ([]byte, error)
 }
@@ -39,6 +40,7 @@ type applet func(args []string, p proc) int
 var applets = map[string]applet{
 	"config": configApplet,
 	"keygen": keygen,
+	"mosh":   moshApplet,
 	"nc":     nc,
 	"status": status,
 }
@@ -72,7 +74,7 @@ func run(argv []string, p proc) int {
 			fmt.Fprintf(p.err, "usage: %s --config FILE <applet> [args...]\n", self)
 			return 2
 		}
-		p.config = configSource(args[0], attachedName, nil)
+		p.config, p.configFile = configSource(args[0], attachedName, nil), args[0]
 		p.sshConfig = configSource(args[0], sshName, nil)
 		name, args = args[1], args[2:]
 	}
@@ -104,7 +106,7 @@ func osProc() proc {
 	file := os.Getenv("STUNMESH_CLI_CONFIG")
 	return proc{
 		in: os.Stdin, out: os.Stdout, err: os.Stderr,
-		getenv: os.Getenv, rand: rand.Reader, config: configSource(file, attachedName, os.Executable),
+		getenv: os.Getenv, rand: rand.Reader, config: configSource(file, attachedName, os.Executable), configFile: file,
 		sshConfig: configSource(file, sshName, os.Executable),
 	}
 }

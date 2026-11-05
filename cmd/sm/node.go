@@ -14,6 +14,9 @@ import (
 type node interface {
 	// DialTCP connects to port on a mesh host.
 	DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error)
+	// UDPRelay relays a new port on 127.0.0.1 to port on a mesh host,
+	// as mesh.UDPRelay does, until stop.
+	UDPRelay(host string, port uint16) (localPort uint16, stop func(), err error)
 	// Peers is the node's live peer state.
 	Peers() ([]mesh.PeerStatus, error)
 	// Close lets the node go.
