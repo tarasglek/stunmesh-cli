@@ -3,14 +3,94 @@
 package relay
 
 import (
+	"io"
 	"net"
 	"testing"
 	"time"
 )
 
+// answerAfterEOF serves connections: read to EOF, then answer.
+func answerAfterEOF(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				b, _ := io.ReadAll(c)
+				_, _ = c.Write(append([]byte("got "), b...))
+			}()
+		}
+	}()
+	return ln
+}
+
+// talk sends msg on a fresh connection to addr, half-closes and reads the
+// answer.
+func talk(t *testing.T, addr, msg string) string {
+	t.Helper()
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte(msg)); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.(*net.TCPConn).CloseWrite()
+	b, err := io.ReadAll(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// Pipe carries a connection to another both ways, passes EOF on as a half
+// close, so the far end can answer after it, and returns once both
+// directions are done.
+func TestPipe(t *testing.T) {
+	target := answerAfterEOF(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		b, err := net.Dial("tcp", target.Addr().String())
+		if err != nil {
+			a.Close()
+			return
+		}
+		Pipe(a, b)
+	}()
+	if got := talk(t, ln.Addr().String(), "ping"); got != "got ping" {
+		t.Errorf("answer %q", got)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Pipe did not return")
+	}
+}
+
 // udpRelay runs UDP between a fresh loopback socket and a conn to an echo
 // server that prefixes what it sends back, and returns the socket's address.
-func udpRelay(t *testing.T) (net.Addr, func()) {
+// sender, if not nil, is UDP's.
+func udpRelay(t *testing.T, sender func(net.Addr)) (net.Addr, func()) {
 	t.Helper()
 	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -36,7 +116,7 @@ func udpRelay(t *testing.T) (net.Addr, func()) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	go func() { UDP(local, remote); close(done) }()
+	go func() { UDP(local, remote, sender); close(done) }()
 	stop := func() {
 		local.Close()
 		select {
@@ -67,7 +147,8 @@ func roundTrip(t *testing.T, c net.Conn, msg string) {
 func TestUDP(t *testing.T) {
 	defer func(d time.Duration) { hopAfter = d }(hopAfter)
 	hopAfter = 100 * time.Millisecond
-	addr, stop := udpRelay(t)
+	senders := make(chan net.Addr, 4)
+	addr, stop := udpRelay(t, func(a net.Addr) { senders <- a })
 	first, err := net.Dial("udp", addr.String())
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +156,9 @@ func TestUDP(t *testing.T) {
 	defer first.Close()
 	roundTrip(t, first, "one")
 	roundTrip(t, first, "two")
+	if a := <-senders; a.String() != first.LocalAddr().String() {
+		t.Errorf("sender %v, want %v", a, first.LocalAddr())
+	}
 
 	time.Sleep(2 * hopAfter)
 	hopped, err := net.Dial("udp", addr.String())
@@ -84,12 +168,18 @@ func TestUDP(t *testing.T) {
 	defer hopped.Close()
 	roundTrip(t, hopped, "after the hop")
 	stop()
+	if a := <-senders; a.String() != hopped.LocalAddr().String() {
+		t.Errorf("sender after the hop %v, want %v", a, hopped.LocalAddr())
+	}
+	if len(senders) != 0 {
+		t.Errorf("sender called %d more times for known senders", len(senders))
+	}
 }
 
 // While the client is active, another local sender neither gets its
 // answers nor reaches the far end.
 func TestUDPKeepsActiveClient(t *testing.T) {
-	addr, stop := udpRelay(t)
+	addr, stop := udpRelay(t, nil)
 	defer stop()
 	client, err := net.Dial("udp", addr.String())
 	if err != nil {
