@@ -31,7 +31,8 @@ import (
 // already up needs no join. The others reach it over HTTP/1.1 on a unix
 // socket, in the shape of Tailscale's LocalAPI:
 //
-//	POST   /v0/dial           Upgrade: sm-dial, Dial-Host, Dial-Port: 101, then the TCP stream
+//	POST   /v0/dial           Upgrade: sm-dial, Dial-Host, Dial-Port: 101, then the TCP stream;
+//	                          with Dial-Stdio: pass, the client's stdin and stdout instead
 //	POST   /v0/udp            Dial-Host, Dial-Port: Relay-Port, a UDP relay's 127.0.0.1 port, held open
 //	DELETE /v0/udp/{port}     closes that relay
 //	GET    /v0/status         the peers, as JSON
@@ -153,7 +154,91 @@ func (s *server) dial(w http.ResponseWriter, r *http.Request) {
 		c.Close()
 		return
 	}
+	if r.Header.Get("Dial-Stdio") == "pass" {
+		serveStdio(conn.(*clientConn), c)
+		return
+	}
 	relay.Pipe(conn, c)
+}
+
+// serveStdio carries c to and from the client's stdin and stdout, which
+// the client sends after the 101 as SCM_RIGHTS. The client's process then
+// leaves the data path, which runs between those descriptors, a pipe or
+// socket from ssh's ProxyCommand, and the node, as it did when the node
+// ran in the client: one process crossing fewer per key, no copy through
+// a unix socket per byte. stdin's EOF is passed on to c as a half close.
+// The stream ends when c's far end closes, stdout fails, or the client
+// goes; an error is written on the control connection before it closes,
+// which ends the client. A write to a stdout whose reader has gone, as
+// when ssh exits first, is a clean end.
+func serveStdio(ctl *clientConn, c net.Conn) {
+	defer ctl.Close()
+	defer c.Close()
+	in, out, err := recvStdio(ctl.UnixConn)
+	if err != nil {
+		_, _ = io.WriteString(ctl, err.Error())
+		return
+	}
+	defer release(in)
+	defer release(out)
+	go func() {
+		_, _ = io.Copy(c, in)
+		if cw, ok := c.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+	}()
+	done := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(out, c)
+		done <- err
+	}()
+	go func() {
+		_, _ = io.Copy(io.Discard, ctl)
+		done <- nil
+	}()
+	if err := <-done; err != nil && !errors.Is(err, syscall.EPIPE) {
+		_, _ = io.WriteString(ctl, err.Error())
+	}
+}
+
+// release closes a descriptor recvStdio took, blocking again first: its
+// description may outlive the stream in another process, as in a shell's
+// producer | { sm nc host 80; cat; }, where cat reads the same pipe.
+func release(f *os.File) {
+	if rc, err := f.SyscallConn(); err == nil {
+		_ = rc.Control(func(fd uintptr) { _ = syscall.SetNonblock(int(fd), false) })
+	}
+	f.Close()
+}
+
+// recvStdio receives the two descriptors serveStdio's client sends, close
+// on exec as ReadMsgUnix takes them, and makes them pollable: O_NONBLOCK
+// on a pipe end or socket that only the client, now waiting, shares with
+// this process; release clears it again.
+func recvStdio(c *net.UnixConn) (in, out *os.File, err error) {
+	oob := make([]byte, syscall.CmsgSpace(2*4))
+	_, oobn, _, _, err := c.ReadMsgUnix(make([]byte, 1), oob)
+	if err != nil {
+		return nil, nil, err
+	}
+	var fds []int
+	if msgs, err := syscall.ParseSocketControlMessage(oob[:oobn]); err == nil && len(msgs) == 1 {
+		fds, _ = syscall.ParseUnixRights(&msgs[0])
+	}
+	if len(fds) != 2 {
+		for _, fd := range fds {
+			syscall.Close(fd)
+		}
+		return nil, nil, errors.New("want stdin and stdout")
+	}
+	for _, fd := range fds {
+		if err := syscall.SetNonblock(fd, true); err != nil {
+			syscall.Close(fds[0])
+			syscall.Close(fds[1])
+			return nil, nil, err
+		}
+	}
+	return os.NewFile(uintptr(fds[0]), "stdin"), os.NewFile(uintptr(fds[1]), "stdout"), nil
 }
 
 // udpRelay is a UDP relay the daemon runs for a client: mesh.UDPRelay's,

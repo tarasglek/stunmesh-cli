@@ -221,6 +221,52 @@ func (d *daemonClient) DialTCP(ctx context.Context, host string, port uint16) (n
 	return s, nil
 }
 
+// DialStdio has the daemon connect to port on a mesh host and carry the
+// connection to and from in and out itself, which must be pipes or
+// sockets (passable): they are sent to it and closed here, and DialStdio
+// returns when the daemon is done with them, with any error it reported.
+func (d *daemonClient) DialStdio(ctx context.Context, host string, port uint16, in, out *os.File) error {
+	res, _, conn, err := d.request(ctx, "POST", "/v0/dial", http.Header{
+		"Connection": {"Upgrade"}, "Upgrade": {"sm-dial"}, "Dial-Stdio": {"pass"},
+		"Dial-Host": {host}, "Dial-Port": {strconv.Itoa(int(port))},
+	})
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusSwitchingProtocols {
+		return fmt.Errorf("sm daemon: dial answered %s", res.Status)
+	}
+	rights := syscall.UnixRights(int(in.Fd()), int(out.Fd()))
+	if _, _, err := conn.(*net.UnixConn).WriteMsgUnix([]byte{0}, rights, nil); err != nil {
+		return fmt.Errorf("sm daemon: %w", err)
+	}
+	in.Close()
+	out.Close()
+	msg, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("sm daemon: %w", err)
+	}
+	if len(msg) > 0 {
+		return errors.New(string(msg))
+	}
+	return nil
+}
+
+// passable returns r and w as the files the daemon can take over: pipes
+// or sockets. Not a terminal, whose O_NONBLOCK the shell sharing it would
+// see, nor a file, which the netpoller cannot wait on.
+func passable(r io.Reader, w io.Writer) (in, out *os.File, ok bool) {
+	in, isIn := r.(*os.File)
+	out, isOut := w.(*os.File)
+	return in, out, isIn && isOut && pipeOrSocket(in) && pipeOrSocket(out)
+}
+
+func pipeOrSocket(f *os.File) bool {
+	st, err := f.Stat()
+	return err == nil && st.Mode()&(os.ModeNamedPipe|os.ModeSocket) != 0
+}
+
 // stream is a connection dialed through the daemon. Reads and writes go
 // through the 101 response's body, which holds whatever was read past
 // the response, then the socket; deadlines are the socket's. Its
