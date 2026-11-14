@@ -15,10 +15,14 @@ const testConfig = `{
   "name": "desk-cli",
   "interface": {"addresses": ["10.200.0.8/24"], "listen_port": 51820, "protocol": "ipv4"},
   "peers": [
-    {"name": "desk", "public_key": "` + deskKey + `", "allowed_ips": ["10.200.0.1/32"], "plugin": "leased", "persistent_keepalive": 25},
-    {"name": "Remote-01", "public_key": "7NkaedCuhiw0u6VLDY1xm4ywp+eZLYUT643Ry53LF04=", "allowed_ips": ["10.200.0.5/32"], "plugin": "leased", "persistent_keepalive": 25}
+    {"name": "desk", "public_key": "` + deskKey + `", "allowed_ips": ["10.200.0.1/32"], "plugin": "mesh", "persistent_keepalive": 25},
+    {"name": "Remote-01", "public_key": "7NkaedCuhiw0u6VLDY1xm4ywp+eZLYUT643Ry53LF04=", "allowed_ips": ["10.200.0.5/32"], "plugin": "mesh", "persistent_keepalive": 25}
   ],
-  "plugins": [{"instance": "dht", "type": "builtin", "name": "opendht", "config": {"endpoints": ["http://dhtproxy2.jami.net"]}}],
+  "plugins": [
+    {"instance": "dht", "type": "builtin", "name": "opendht", "config": {"endpoints": ["http://dhtproxy2.jami.net"]}},
+    {"instance": "leased", "type": "builtin", "name": "lease", "config": {"next": "dht", "keepalive": "25s"}},
+    {"instance": "mesh", "type": "builtin", "name": "lan", "config": {"next": "leased"}}
+  ],
   "stun": {"addresses": ["stun.l.google.com:19302"]},
   "refresh_interval_seconds": 60,
   "domain": "mesh.internal",

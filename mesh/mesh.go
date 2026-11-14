@@ -11,10 +11,11 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/tarasglek/stunmesh-avahi/lease" // the client's peers use lease
+	_ "github.com/tarasglek/stunmesh-avahi/lan" // the client's peers use lan, lease, opendht
+	_ "github.com/tarasglek/stunmesh-avahi/lease"
 	"github.com/tarasglek/stunmesh-avahi/wgdev"
 	"github.com/tarasglek/stunmesh-cli/relay"
-	_ "github.com/tjjh89017/stunmesh-go/builtin/all" // the plugins nodes may name
+	_ "github.com/tjjh89017/stunmesh-go/builtin/opendht"
 	"github.com/tjjh89017/stunmesh-go/userspace"
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/tun/netstack"

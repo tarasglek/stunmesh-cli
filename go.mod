@@ -3,7 +3,7 @@ module github.com/tarasglek/stunmesh-cli
 go 1.26.5
 
 require (
-	github.com/tarasglek/stunmesh-avahi v0.3.1-0.20261103170919-5733c6d0f27b
+	github.com/tarasglek/stunmesh-avahi v0.3.1-0.20261114140520-9210f1c5632c
 	github.com/tjjh89017/stunmesh-go v1.16.1-0.20261105011442-924e85ff5da3
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0

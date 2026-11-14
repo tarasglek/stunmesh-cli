@@ -7,8 +7,8 @@ phones and other machines where a system VPN is unavailable or already
 taken.
 
 WireGuard runs on wireguard-go's netstack inside the process; peer
-discovery is the standard stunmesh-go machinery with the lease plugin
-from [stunmesh-avahi](https://github.com/tarasglek/stunmesh-avahi).
+discovery is the standard stunmesh-go machinery with the lan and lease
+plugins from [stunmesh-avahi](https://github.com/tarasglek/stunmesh-avahi).
 
 Everything a node needs travels in its binary, attached as a zip: the
 public node config, a static hosts table and an ssh_config. Only the
