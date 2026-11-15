@@ -28,11 +28,22 @@ type proc struct {
 	out, err io.Writer
 	getenv   func(string) string
 	rand     io.Reader
-	// config is the node config compiled in, or read from configFile.
+	// exe is the command that runs this binary: its path, after the
+	// dynamic linker's if that loaded it.
+	exe []string
+	// config is the node config attached to the binary, or read from
+	// configFile.
 	config     func() ([]byte, error)
 	configFile string
-	// sshConfig is the ssh_config that came with the node config.
-	sshConfig func() ([]byte, error)
+}
+
+// command is the command that runs this sm again, with its config.
+func (p proc) command() ([]string, error) {
+	if p.configFile == "" {
+		return p.exe, nil
+	}
+	abs, err := filepath.Abs(p.configFile)
+	return append(slices.Clip(p.exe), "--config", abs), err
 }
 
 type applet func(args []string, p proc) int
@@ -76,8 +87,7 @@ func run(argv []string, p proc) int {
 			fmt.Fprintf(p.err, "usage: %s --config FILE <applet> [args...]\n", self)
 			return 2
 		}
-		p.config, p.configFile = configSource(args[0], attachedName, nil), args[0]
-		p.sshConfig = configSource(args[0], sshName, nil)
+		p.config, p.configFile = configSource(args[0], ""), args[0]
 		name, args = args[1], args[2:]
 	}
 	if name == "--version" {
@@ -101,14 +111,37 @@ func run(argv []string, p proc) int {
 	return a(args, p)
 }
 
-func main() { os.Exit(run(os.Args, osProc())) }
-
-// osProc is this process.
-func osProc() proc {
-	file := os.Getenv("STUNMESH_CLI_CONFIG")
-	return proc{
-		in: os.Stdin, out: os.Stdout, err: os.Stderr,
-		getenv: os.Getenv, rand: rand.Reader, config: configSource(file, attachedName, os.Executable), configFile: file,
-		sshConfig: configSource(file, sshName, os.Executable),
+// invocation is the command that runs this binary, given the process's
+// executable exe, and the argv of running it directly by its path.
+// Android lets an app run a file in its data only as linker64 PATH ARGS:
+// termux-exec does that to every command, keeping its argv[0], and
+// elsewhere it is typed out. exe is then the linker and argv[1], which
+// the linker takes for nothing else, the binary: named here without
+// symlinks, as exe is, so that run again it is sm and not an applet.
+func invocation(exe string, argv []string) ([]string, []string, error) {
+	if b := filepath.Base(exe); b != "linker64" && b != "linker" {
+		return []string{exe}, argv, nil
 	}
+	bin, err := filepath.EvalSymlinks(argv[1])
+	return []string{exe, bin}, argv[1:], err
 }
+
+// osMain runs sm as this process.
+func osMain() int {
+	var cmd, argv []string
+	exe, err := os.Executable()
+	if err == nil {
+		cmd, argv, err = invocation(exe, os.Args)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", self, err)
+		return 1
+	}
+	file := os.Getenv("STUNMESH_CLI_CONFIG")
+	return run(argv, proc{
+		in: os.Stdin, out: os.Stdout, err: os.Stderr, getenv: os.Getenv, rand: rand.Reader,
+		exe: cmd, config: configSource(file, cmd[len(cmd)-1]), configFile: file,
+	})
+}
+
+func main() { os.Exit(osMain()) }

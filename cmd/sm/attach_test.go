@@ -29,7 +29,7 @@ func fakeExe(t *testing.T, dir string) (string, []byte) {
 func TestAttach(t *testing.T) {
 	dir := t.TempDir()
 	base, exe := fakeExe(t, dir)
-	if _, err := readAttached(base, attachedName); err != errNoConfig {
+	if _, err := readAttached(base); err != errNoConfig {
 		t.Fatalf("plain executable: %v", err)
 	}
 	conf := filepath.Join(dir, "node.json")
@@ -38,7 +38,7 @@ func TestAttach(t *testing.T) {
 	if err := attach(base, conf, out); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readAttached(out, attachedName)
+	got, err := readAttached(out)
 	if err != nil || string(got) != testConfig {
 		t.Fatalf("readAttached = %q, %v", got, err)
 	}
@@ -82,7 +82,7 @@ func TestAttach(t *testing.T) {
 	if !bytes.Equal(a, f) {
 		t.Error("re-attaching does not strip the old config")
 	}
-	if got, _ := readAttached(again, attachedName); string(got) != other {
+	if got, _ := readAttached(again); string(got) != other {
 		t.Errorf("after re-attach: %q", got)
 	}
 }
@@ -114,7 +114,8 @@ func TestConfigSource(t *testing.T) {
 	os.WriteFile(conf, []byte(testConfig), 0o600)
 	var out, errb bytes.Buffer
 	p := testProc(nil, &out, &errb)
-	p.config = configSource("", attachedName, func() (string, error) { b, _ := fakeExe(t, dir); return b, nil })
+	base, _ := fakeExe(t, dir)
+	p.config = configSource("", base)
 	if code := run([]string{"sm", "config"}, p); code != 1 || !strings.Contains(errb.String(), "sm config attach") {
 		t.Errorf("no config: %d %q", code, errb.String())
 	}
@@ -125,7 +126,7 @@ func TestConfigSource(t *testing.T) {
 	if code := run([]string{"sm", "--config"}, p); code != 2 {
 		t.Errorf("--config without a file: %d", code)
 	}
-	if b, err := configSource(conf, attachedName, nil)(); err != nil || string(b) != testConfig {
+	if b, err := configSource(conf, "")(); err != nil || string(b) != testConfig {
 		t.Errorf("file source: %v", err)
 	}
 }
@@ -202,37 +203,22 @@ func TestReadAttachedCap(t *testing.T) {
 	w.Write(bytes.Repeat([]byte("x"), 2<<20))
 	zw.Close()
 	os.WriteFile(p, buf.Bytes(), 0o755)
-	if b, err := readAttached(p, attachedName); err != nil || len(b) != 1<<20 {
+	if b, err := readAttached(p); err != nil || len(b) != 1<<20 {
 		t.Errorf("read %d bytes, %v; want 1 MiB", len(b), err)
 	}
 }
 
-// The ssh_config beside node.json is attached with it, and sm config ssh
-// prints it; without one, attach still works and config ssh says why.
-func TestAttachSSHConfig(t *testing.T) {
-	dir := t.TempDir()
-	base, _ := fakeExe(t, dir)
-	conf := filepath.Join(dir, "node.json")
-	os.WriteFile(conf, []byte(testConfig), 0o600)
-	const ssh = "Host remote-01 lap1\n    ProxyCommand sm nc %h %p\n"
-	os.WriteFile(filepath.Join(dir, "ssh_config"), []byte(ssh), 0o600)
-	out := filepath.Join(dir, "sm-node")
-	if err := attach(base, conf, out); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := readAttached(out, sshName); err != nil || string(got) != ssh {
-		t.Errorf("attached ssh_config = %q, %v", got, err)
-	}
-	if got, err := readAttached(out, attachedName); err != nil || string(got) != testConfig {
-		t.Errorf("attached node.json = %q, %v", got, err)
+// sm config ssh sends every other host through this very sm and config.
+func TestConfigSSH(t *testing.T) {
+	env := map[string]string{"config": testConfig}
+	const hosts = "Host lap1 remote-01 *.mesh.internal\n    ProxyCommand "
+	if code, out, errs := runEnv(env, "sm", "config", "ssh"); code != 0 || out != hosts+"/x/sm nc %h %p\n" {
+		t.Errorf("config ssh: %d %q %q", code, out, errs)
 	}
 	var o, e bytes.Buffer
-	p := testProc(nil, &o, &e)
-	p.sshConfig = configSource("", sshName, func() (string, error) { return out, nil })
-	if code := run([]string{"sm", "config", "ssh"}, p); code != 0 || o.String() != ssh {
-		t.Errorf("config ssh: %d %q %q", code, o.String(), e.String())
-	}
-	if code, _, errs := runEnv(map[string]string{"config": testConfig}, "sm", "config", "ssh"); code != 1 || !strings.Contains(errs, "gen.py") {
-		t.Errorf("config ssh without one: %d %q", code, errs)
+	p := testProc(env, &o, &e)
+	p.exe, p.configFile = []string{"/linker64", "/x/sm"}, "/c/node.json"
+	if code := run([]string{"sm", "config", "ssh"}, p); code != 0 || o.String() != hosts+"/linker64 /x/sm --config /c/node.json nc %h %p\n" {
+		t.Errorf("config ssh through the linker: %d %q %q", code, o.String(), e.String())
 	}
 }

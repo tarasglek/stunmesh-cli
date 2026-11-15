@@ -5,10 +5,9 @@
 #   make build GOOS=android GOARCH=arm64 NODE=phone-cli CONFIG=~/mesh
 #
 # builds the generic build/sm-OS-ARCH and from it build/sm-NODE-OS-ARCH,
-# the same binary with CONFIG/NODE/node.json and the ssh_config beside
-# it, as gen.py renders them, attached as a zip (sm config attach;
-# unzip -p reads it back). Without NODE, only the generic binary, which
-# takes its config from --config FILE.
+# the same binary with CONFIG/NODE/node.json, as gen.py renders it,
+# attached as a zip (sm config attach; unzip -p reads it back). Without
+# NODE, only the generic binary, which takes its config from --config FILE.
 # build/bin/ gets a symlink per applet, so PATH=build/bin:$PATH makes
 # mosh, nc, ... the applets. Nothing is installed outside build/.
 #

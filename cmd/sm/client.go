@@ -14,7 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -59,26 +59,19 @@ func newDaemonClient(p proc, cfg mesh.Config) (*daemonClient, error) {
 	}
 	return &daemonClient{cfg: cfg, sock: sock, lock: lock, log: log, id: nodeID(b, priv),
 		start: func() (<-chan struct{}, error) {
-			exe, err := os.Executable()
+			sm, err := p.command()
 			if err != nil {
 				return nil, err
 			}
-			return startDaemon(exe, p.configFile)
+			return startDaemon(sm)
 		}}, nil
 }
 
-// startDaemon starts exe as sm daemon -bg, detached from this process's
-// session and directory, and returns a channel closed when it exits.
-func startDaemon(exe, configFile string) (<-chan struct{}, error) {
-	args := []string{self}
-	if configFile != "" {
-		abs, err := filepath.Abs(configFile)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, "--config", abs)
-	}
-	cmd := &exec.Cmd{Path: exe, Args: append(args, "daemon", "-bg"), Dir: "/",
+// startDaemon starts sm daemon -bg, sm being the command that runs it,
+// detached from this process's session and directory, and returns a
+// channel closed when it exits.
+func startDaemon(sm []string) (<-chan struct{}, error) {
+	cmd := &exec.Cmd{Path: sm[0], Args: slices.Concat([]string{self}, sm[1:], []string{"daemon", "-bg"}), Dir: "/",
 		SysProcAttr: &syscall.SysProcAttr{Setsid: true}}
 	// The daemon outlives this process, so it must not keep descriptors
 	// this one inherited, such as a pipe whose reader waits for EOF.

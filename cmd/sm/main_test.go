@@ -5,7 +5,8 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +21,34 @@ const testConfig = `{
   "domain": "mesh.internal",
   "hosts": {"remote-01": "10.200.0.5", "lap1": "10.200.0.2", "desk-cli": "10.200.0.8"}
 }`
+
+// Through Android's linker, by hand or by termux-exec, sm sees the argv
+// of a direct run by path, and runs again as the linker on the binary
+// itself, not the symlink that named an applet.
+func TestInvocation(t *testing.T) {
+	const linker = "/apex/com.android.runtime/bin/linker64"
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	sm, mosh := filepath.Join(dir, "sm"), filepath.Join(dir, "mosh")
+	os.WriteFile(sm, nil, 0o755)
+	os.Symlink("sm", mosh)
+	for _, tc := range []struct {
+		exe       string
+		argv      []string
+		cmd, want []string
+	}{
+		{linker, []string{"/system/bin/linker64", sm, "nc", "h", "22"}, []string{linker, sm}, []string{sm, "nc", "h", "22"}},
+		{linker, []string{"sm", sm, "--list"}, []string{linker, sm}, []string{sm, "--list"}},
+		{linker, []string{"mosh", mosh, "h"}, []string{linker, sm}, []string{mosh, "h"}},
+		{sm, []string{"mosh", "h"}, []string{sm}, []string{"mosh", "h"}}, // run directly
+	} {
+		if cmd, argv, err := invocation(tc.exe, tc.argv); err != nil || !slices.Equal(cmd, tc.cmd) || !slices.Equal(argv, tc.want) {
+			t.Errorf("invocation(%q, %q) = %q %q %v, want %q %q", tc.exe, tc.argv, cmd, argv, err, tc.cmd, tc.want)
+		}
+	}
+	if _, _, err := invocation(linker, []string{"sm", filepath.Join(dir, "gone")}); err == nil {
+		t.Error("no error for a binary that is not there")
+	}
+}
 
 func TestPick(t *testing.T) {
 	for _, tc := range []struct {
@@ -61,13 +90,7 @@ func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
 			}
 			return "off"
 		},
-		rand: rand.Reader, config: config,
-		sshConfig: func() ([]byte, error) {
-			if c, ok := env["ssh_config"]; ok {
-				return []byte(c), nil
-			}
-			return nil, fs.ErrNotExist
-		},
+		rand: rand.Reader, exe: []string{"/x/sm"}, config: config,
 	}
 }
 

@@ -23,7 +23,7 @@ import (
 // processes, and sm can start its daemon from os.Executable.
 func TestMain(m *testing.M) {
 	if os.Getenv("SM_TEST_EXEC") == "1" {
-		os.Exit(run(os.Args, osProc()))
+		os.Exit(osMain())
 	}
 	os.Exit(m.Run())
 }

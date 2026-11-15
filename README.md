@@ -11,7 +11,7 @@ discovery is the standard stunmesh-go machinery with the lan and lease
 plugins from [stunmesh-avahi](https://github.com/tarasglek/stunmesh-avahi).
 
 Everything a node needs travels in its binary, attached as a zip: the
-public node config, a static hosts table and an ssh_config. Only the
+public node config and a static hosts table. Only the
 private key is on the device, made there and never in the config or
 binary.
 
@@ -30,24 +30,26 @@ sm status -w 30s remote-01   # hosts table, live peer state
 ```
 
 `make build NODE=...` builds the generic `build/sm-<os>-<arch>` and
-attaches `CONFIG/NODE/node.json`, and the `ssh_config` gen.py renders
-beside it, to a copy, so the repo carries no site config and one build
-serves every node of an architecture. They are stored zip entries at
-the end of the file: `sm config` and `sm config ssh` print them, as does
-`unzip -p`. `sm config attach BINARY NODE.json OUT` attaches them to any
+attaches `CONFIG/NODE/node.json` to a copy, so the repo carries no site
+config and one build serves every node of an architecture. It is a
+stored zip entry at the end of the file: `sm config` prints it, as does
+`unzip -p`. `sm config attach BINARY NODE.json OUT` attaches one to any
 sm binary. `sm --config FILE <applet>` or `$STUNMESH_CLI_CONFIG=FILE`
-reads them from the file system instead. Names resolve from the hosts
+reads it from the file system instead. Names resolve from the hosts
 table only, never DNS. The device key stays in
 `~/.config/stunmesh-cli/key`. build/bin/ has a symlink per applet, so
 with it first in PATH plain `mosh` is the applet.
 
 Termux on Android gets a `GOOS=android` build: Go then keeps clear of
-the system calls Android's seccomp kills apps for.
+the system calls Android's seccomp kills apps for. Other Android apps'
+shells may run a file of theirs only through the linker, as
+`/system/bin/linker64 PATH ARGS`; sm run so starts its daemon so too.
 
 ## ssh and mosh
 
-OpenSSH reaches the mesh through `ProxyCommand sm nc %h %p`, which the
-attached ssh_config sets for every mesh host, so everything ssh does
+OpenSSH reaches the mesh through `ProxyCommand sm nc %h %p`, which
+`sm config ssh` sets for every host in the hosts table, with sm as it
+was run: by its full path, config and linker, so everything ssh does
 (agent, known_hosts, `-L`/`-R`/`-D`, scp, rsync, git, `ControlMaster`)
 works as on any network.
 
