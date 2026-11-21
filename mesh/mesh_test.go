@@ -100,7 +100,7 @@ func startPair(t *testing.T) (a, b *Mesh) {
 }
 
 // A dials B by name over TCP and UDP through both netstacks and a real
-// WireGuard handshake; then Peers names B and shows the handshake.
+// WireGuard handshake.
 func TestMeshDialByName(t *testing.T) {
 	a, b := startPair(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)

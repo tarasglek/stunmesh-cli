@@ -107,10 +107,10 @@ func TestNarrow(t *testing.T) {
 		t.Errorf("Lookup after Narrow: %v %v", a, err)
 	}
 
-	// No peer at the address: nothing to narrow to, the config stays whole.
+	// No peer at the address, as for this node's own: an error.
 	for _, a := range []string{"10.200.0.200", "10.200.0.8"} {
-		if w, err := c.Narrow(netip.MustParseAddr(a)); err != nil || len(w.Peers) != 2 || len(w.Node.Peers) != 2 {
-			t.Errorf("Narrow(%s) = %d peers, %v", a, len(w.Peers), err)
+		if _, err := c.Narrow(netip.MustParseAddr(a)); err == nil || !strings.Contains(err.Error(), "no peer at") {
+			t.Errorf("Narrow(%s): %v", a, err)
 		}
 	}
 }

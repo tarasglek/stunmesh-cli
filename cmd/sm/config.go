@@ -31,17 +31,15 @@ func nodeConfig(p proc) (mesh.Config, error) {
 // log at that level and above on stderr; without it, verbose 1 shows info
 // and 2 or more debug, as ssh -v and -vv.
 func startMesh(p proc, cfg mesh.Config, verbose int, peer netip.Addr) (*mesh.Mesh, error) {
+	cfg, err := cfg.Narrow(peer)
+	if err != nil {
+		return nil, err
+	}
 	priv, err := loadKey(p)
 	if err != nil {
 		return nil, err
 	}
-	if cfg, err = cfg.Narrow(peer); err != nil {
-		return nil, err
-	}
 	log := logger(p, verbose)
-	if log == nil {
-		log = func(string, string) {}
-	}
 	m, err := mesh.Start(cfg, priv, log)
 	if err != nil {
 		return nil, err
@@ -100,7 +98,7 @@ func logger(p proc, verbose int) mesh.Logger {
 	}
 	min, ok := logLevels[level]
 	if !ok {
-		return nil
+		return func(string, string) {}
 	}
 	return func(level, msg string) {
 		if l, ok := logLevels[level]; !ok || l >= min {

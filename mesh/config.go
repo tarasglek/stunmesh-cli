@@ -87,35 +87,24 @@ func ParseConfig(data []byte) (Config, error) {
 	return c, nil
 }
 
-// Narrow returns the config with only the peers at addrs, for a node that
-// serves one session. stunmesh-go's discovery cycle publishes to every
-// peer and then looks them up one by one, each a DHT round trip, so on a
-// full mesh a cold dial waits on peers it never talks to; narrowed, the
-// cycle is one publish and one lookup. An address that is no peer's, such
-// as an unnamed literal, narrows nothing: the config is returned whole.
-func (c Config) Narrow(addrs ...netip.Addr) (Config, error) {
-	keep := map[string]bool{}
-	for _, name := range c.Peers {
-		for _, a := range addrs {
-			if c.Hosts[name] == a {
-				keep[name] = true
-			}
+// Narrow returns the config with only the peer at addr, for a node that
+// serves one session: discovery then does one publish and one lookup, not
+// one DHT round trip per peer, and only that peer can reach the node. An
+// address that is no peer's, such as this node's own, is an error, not
+// the whole mesh.
+func (c Config) Narrow(addr netip.Addr) (Config, error) {
+	for key, name := range c.Peers {
+		if c.Hosts[name] != addr {
+			continue
 		}
+		n := c
+		n.Node.Peers = slices.DeleteFunc(slices.Clone(c.Node.Peers), func(p userspace.PeerConfig) bool {
+			return strings.ToLower(p.Name) != name
+		})
+		n.Peers = map[[32]byte]string{key: name}
+		return n, nil
 	}
-	if len(keep) < len(addrs) {
-		return c, nil
-	}
-	n := c
-	n.Node.Peers = slices.DeleteFunc(slices.Clone(c.Node.Peers), func(p userspace.PeerConfig) bool {
-		return !keep[strings.ToLower(p.Name)]
-	})
-	n.Peers = make(map[[32]byte]string, len(keep))
-	for k, name := range c.Peers {
-		if keep[name] {
-			n.Peers[k] = name
-		}
-	}
-	return n, nil
+	return c, fmt.Errorf("no peer at %s", addr)
 }
 
 // Lookup resolves a mesh host from the hosts table only: a node name, the

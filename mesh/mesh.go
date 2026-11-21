@@ -31,7 +31,6 @@ type Logger func(level, msg string)
 type Mesh struct {
 	cfg        Config
 	node       *userspace.Node
-	dev        backend
 	net        *netstack.Net
 	unregister func()
 }
@@ -92,13 +91,13 @@ func Start(cfg Config, priv [32]byte, log Logger) (*Mesh, error) {
 	if s, err := node.Status(); err != nil || s.ListenPort != port {
 		node.Stop()
 		unregister()
+		if err != nil {
+			return nil, err
+		}
 		return nil, busy
 	}
-	return &Mesh{cfg: cfg, node: node, dev: dev, net: tnet, unregister: unregister}, nil
+	return &Mesh{cfg: cfg, node: node, net: tnet, unregister: unregister}, nil
 }
-
-// Config is the node config the mesh runs.
-func (m *Mesh) Config() Config { return m.cfg }
 
 // DialTCP connects to port on a mesh host named as Lookup takes it.
 func (m *Mesh) DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
@@ -149,10 +148,11 @@ func (m *Mesh) ListenTCP(port uint16) (net.Listener, error) {
 	return ln, nil
 }
 
-// Stop takes the node down, then its device out of wgdev. The order mirrors Start's: while the node stops, the device
-// stays registered and answers "node not running", so lease falls through
-// to its inner store; unregistered, the name would fall through to netlink
-// and a kernel interface of the same name. Once node.Stop returns, lease is closed and
+// Stop takes the node down, then its device out of wgdev. The order
+// mirrors Start's: while the node stops, the device stays registered and
+// answers "node not running", so lease falls through to its inner store;
+// unregistered, the name would fall through to netlink and a kernel
+// interface of the same name. Once node.Stop returns, lease is closed and
 // has waited for its watches, so nothing calls wgdev for the name again.
 func (m *Mesh) Stop() {
 	m.node.Stop()

@@ -78,6 +78,7 @@ func TestNcRejects(t *testing.T) {
 		{[]string{"nc", "remote-01", "ssh"}, 1, `bad port "ssh"`},
 		{[]string{"nc", "remote-01", "0"}, 1, "bad port"},
 		{[]string{"nc", "nosuch", "22"}, 1, `unknown host "nosuch": not in the compiled-in hosts table`},
+		{[]string{"nc", "desk-cli", "22"}, 1, "no peer at 10.200.0.8"}, // this node itself: never the whole mesh
 		{[]string{"nc", "remote-01", "22"}, 1, "run sm keygen"},
 	} {
 		code, _, errs := runEnv(env, append([]string{"sm"}, tc.args...)...)

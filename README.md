@@ -50,9 +50,9 @@ ProxyCommand so.
 
 OpenSSH reaches the mesh through `ProxyCommand sm nc %h %p`, which
 `sm config ssh` sets for every host in the hosts table, with sm as it
-was run: by its full path, config and linker, so everything ssh does
-(agent, known_hosts, `-L`/`-R`/`-D`, scp, rsync, git, `ControlMaster`)
-works as on any network.
+was run: by its full path, config and linker, so ssh's own features
+(agent, known_hosts, `-L`/`-R`/`-D`, scp, rsync, git) work over it, one
+session per device at a time (below).
 
 `sm mosh` starts mosh-server with that same ssh, as mosh does, so its
 user, port and keys come from ssh_config too, then runs mosh-client
@@ -72,15 +72,19 @@ is its lock. While one process holds it, another `sm nc` or `sm mosh` on
 the device, from any app or user, fails at once with "already running"
 instead of fighting it for the peer. Sessions to one host can share a
 process with ssh's own `ControlMaster auto` (without `ControlPersist`,
-which would hold the node after the session).
+which would hold the node after the session); `sm mosh` still needs its
+own node, so not while an ssh session is open. `sm nc` ends when either
+side does, so it is ssh's proxy, not a general netcat.
 
 `sm --expose PORT <applet>` (repeatable) also serves TCP `PORT` on
 `127.0.0.1` at the node's mesh address, for as long as that process is
 the node: with `sm --expose 22 config ssh`, every `ssh` through the mesh
 lets the host at the other end `ssh` back to this device while the
-session is up. Only that host is a peer, so only it can connect.
+session is up. Only that host is a peer, so only it can connect. The
+local service sees the connection as from `127.0.0.1`;
 `STUNMESH_CLI_LOG=info` shows the node's log, with each exposed
-connection, on stderr.
+connection's peer, on stderr. The flag goes after `sm`, so for the
+`mosh` symlink: `alias mosh='sm --expose 22 mosh'`.
 
 ## Build
 
