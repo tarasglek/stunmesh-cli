@@ -5,6 +5,7 @@ package mesh
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,14 +21,14 @@ import (
 	"github.com/tarasglek/stunmesh-avahi/wgdev"
 )
 
-// pairConfig is node i of a two-node mesh "pa"/"pb" with no plugins and
-// STUN on a closed port: nothing leaves the host.
+// pairConfig is node i of a two-node mesh "pa"/"pb" on a free UDP port,
+// with no plugins and STUN on a closed port: nothing leaves the host.
 func pairConfig(t *testing.T, i int, peerPub [32]byte) Config {
 	t.Helper()
 	names := []string{"pa", "pb"}
 	doc := map[string]any{
 		"name":      names[i],
-		"interface": map[string]any{"addresses": []string{fmt.Sprintf("10.99.0.%d/24", i+1)}},
+		"interface": map[string]any{"addresses": []string{fmt.Sprintf("10.99.0.%d/24", i+1)}, "listen_port": freeUDPPort(t)},
 		"peers": []any{map[string]any{
 			"name": names[1-i], "public_key": FormatKey(peerPub),
 			"allowed_ips": []string{fmt.Sprintf("10.99.0.%d/32", 2-i)},
@@ -45,6 +46,16 @@ func pairConfig(t *testing.T, i int, peerPub [32]byte) Config {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func freeUDPPort(t *testing.T) int {
+	t.Helper()
+	c, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).Port
 }
 
 func listenPort(t *testing.T, m *Mesh) int {
@@ -146,22 +157,13 @@ func TestMeshDialByName(t *testing.T) {
 		t.Fatalf("udp = %q, %v", buf[:n], err)
 	}
 
-	peers, err := a.Peers()
-	if err != nil || len(peers) != 1 {
-		t.Fatalf("Peers = %+v, %v", peers, err)
-	}
-	if p := peers[0]; p.Name != "pb" || p.Addr != netip.MustParseAddr("10.99.0.2") || p.LastHandshake.IsZero() || p.Bytes == 0 {
-		t.Errorf("peer = %+v", p)
-	}
-
 	if _, err := a.DialTCP(ctx, "nosuch", 22); err == nil || !strings.Contains(err.Error(), "hosts table") {
 		t.Errorf("dial of an unknown host: %v", err)
 	}
 }
 
 // A program on this host reaches a UDP service on B through A's relay, as
-// mosh-client reaches mosh-server; stop, and Stop for the relays still
-// open, free their ports.
+// mosh-client reaches mosh-server; stop frees its port.
 func TestMeshUDPRelay(t *testing.T) {
 	a, b := startPair(t)
 	pc, err := b.net.ListenUDPAddrPort(netip.MustParseAddrPort("10.99.0.2:60002"))
@@ -180,7 +182,7 @@ func TestMeshUDPRelay(t *testing.T) {
 		}
 	}()
 
-	port, _, err := a.UDPRelay("pb", 60002)
+	port, stopFirst, err := a.UDPRelay("pb", 60002)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,8 +220,8 @@ func TestMeshUDPRelay(t *testing.T) {
 	stop()
 	stop()
 	portFree(t, other, "stop")
-	a.Stop()
-	portFree(t, port, "Stop")
+	stopFirst()
+	portFree(t, port, "stop")
 }
 
 func portFree(t *testing.T, port uint16, after string) {
@@ -259,6 +261,34 @@ func TestMeshRegistersWithWgdev(t *testing.T) {
 		t.Fatalf("restart under the same name: %v", err)
 	}
 	again.Stop()
+}
+
+// The node's UDP port is its lock: a second node on it, with the same or
+// another config, is refused with ErrBusy and leaves the first alone;
+// once the first stops, the port starts a node again.
+func TestStartBusy(t *testing.T) {
+	a, _ := startPair(t)
+	other := pairConfig(t, 1, PublicKey(testKey(1)))
+	other.Name = "pc"
+	other.Node.Name = "pc"
+	other.Node.Interface.ListenPort = listenPort(t, a)
+	for range 10 {
+		if m, err := Start(other, testKey(4), nil); !errors.Is(err, ErrBusy) {
+			if m != nil {
+				m.Stop()
+			}
+			t.Fatalf("second node on a taken port: %v", err)
+		}
+	}
+	if got := listenPort(t, a); got != other.Node.Interface.ListenPort {
+		t.Errorf("first node moved to port %d", got)
+	}
+	a.Stop()
+	m, err := Start(other, testKey(4), nil)
+	if err != nil {
+		t.Fatalf("start on the freed port: %v", err)
+	}
+	m.Stop()
 }
 
 // Without a resolv.conf, as on Android, lookups use the fallback servers;

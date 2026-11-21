@@ -53,6 +53,7 @@ func TestParseConfigRejects(t *testing.T) {
 		"bad host":      {`"desk": "10.200.0.1"`, `"desk": "desk.lan"`, "host desk"},
 		"bad peer key":  {deskKey, "AAAA", "peer desk"},
 		"not json":      {`{`, `[`, "node config"},
+		"no port":       {`"listen_port": 51820`, `"listen_port": 0`, "no listen_port"},
 	} {
 		_, err := ParseConfig([]byte(strings.Replace(testConfig, tc.from, tc.to, 1)))
 		if err == nil || !strings.Contains(err.Error(), tc.err) {

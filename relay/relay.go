@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 // Package relay carries traffic between two ends: Pipe a stream, such as
-// sm daemon's dialed connections, and UDP datagrams, such as mosh's.
+// connections to --expose'd ports, and UDP datagrams, such as mosh's.
 package relay
 
 import (

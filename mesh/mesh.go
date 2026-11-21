@@ -4,11 +4,12 @@ package mesh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
-	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/tarasglek/stunmesh-avahi/lan" // the client's peers use lan, lease, opendht
@@ -33,10 +34,13 @@ type Mesh struct {
 	dev        backend
 	net        *netstack.Net
 	unregister func()
-
-	mu     sync.Mutex
-	relays map[net.PacketConn]struct{} // UDPRelay's open sockets
 }
+
+// ErrBusy is Start's error when the node's UDP port is taken: another
+// process on this device is the node already. The port is the node's
+// lock, held by the kernel for every uid and freed when the process dies,
+// so two live nodes with one key on one device cannot happen.
+var ErrBusy = errors.New("node already running on this device")
 
 // Start brings the node up with the device's private key: a netstack on
 // the node's tunnel address, stunmesh-go's node on it, and the device
@@ -73,11 +77,24 @@ func Start(cfg Config, priv [32]byte, log Logger) (*Mesh, error) {
 	if err != nil {
 		return nil, err
 	}
+	port := ucfg.Interface.ListenPort
+	busy := fmt.Errorf("%s: %w: UDP port %d is taken", cfg.Name, ErrBusy, port)
 	if err := node.Start(); err != nil {
 		unregister()
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return nil, busy
+		}
 		return nil, err
 	}
-	return &Mesh{cfg: cfg, node: node, dev: dev, net: tnet, unregister: unregister, relays: map[net.PacketConn]struct{}{}}, nil
+	// wireguard-go does not always fail on a taken port: a failed bind
+	// can leave it on a random one instead. Only the configured port
+	// counts.
+	if s, err := node.Status(); err != nil || s.ListenPort != port {
+		node.Stop()
+		unregister()
+		return nil, busy
+	}
+	return &Mesh{cfg: cfg, node: node, dev: dev, net: tnet, unregister: unregister}, nil
 }
 
 // Config is the node config the mesh runs.
@@ -105,7 +122,7 @@ func (m *Mesh) DialUDP(host string, port uint16) (net.Conn, error) {
 // port on a mesh host, for a program with its own UDP client, such as
 // mosh-client: it sends to 127.0.0.1 and the returned port, and its
 // datagrams leave through the node. relay.UDP says whose datagrams are
-// taken. The relay runs until stop, which is idempotent, or Stop.
+// taken. The relay runs until stop, which is idempotent.
 func (m *Mesh) UDPRelay(host string, port uint16) (localPort uint16, stop func(), err error) {
 	remote, err := m.DialUDP(host, port)
 	if err != nil {
@@ -116,16 +133,8 @@ func (m *Mesh) UDPRelay(host string, port uint16) (localPort uint16, stop func()
 		remote.Close()
 		return 0, nil, err
 	}
-	m.mu.Lock()
-	m.relays[local] = struct{}{}
-	m.mu.Unlock()
 	go relay.UDP(local, remote, nil)
-	stop = func() {
-		m.mu.Lock()
-		delete(m.relays, local)
-		m.mu.Unlock()
-		local.Close() // relay.UDP closes the mesh side
-	}
+	stop = func() { local.Close() } // relay.UDP closes the mesh side
 	return uint16(local.LocalAddr().(*net.UDPAddr).Port), stop, nil
 }
 
@@ -140,44 +149,12 @@ func (m *Mesh) ListenTCP(port uint16) (net.Listener, error) {
 	return ln, nil
 }
 
-// PeerStatus is one peer as WireGuard sees it, named from the config.
-type PeerStatus struct {
-	Name string
-	Addr netip.Addr
-	wgdev.Peer
-}
-
-// Peers reads the device's live peer state.
-func (m *Mesh) Peers() ([]PeerStatus, error) {
-	d, err := m.dev.Read()
-	if err != nil {
-		return nil, err
-	}
-	return peerStatus(m.cfg, d), nil
-}
-
-func peerStatus(cfg Config, d wgdev.Device) []PeerStatus {
-	out := make([]PeerStatus, 0, len(d.Peers))
-	for _, p := range d.Peers {
-		name := cfg.Peers[p.PublicKey]
-		out = append(out, PeerStatus{Name: name, Addr: cfg.Hosts[name], Peer: p})
-	}
-	return out
-}
-
-// Stop closes UDPRelay's relays, takes the node down, then its device out
-// of wgdev. The order mirrors Start's: while the node stops, the device
+// Stop takes the node down, then its device out of wgdev. The order mirrors Start's: while the node stops, the device
 // stays registered and answers "node not running", so lease falls through
 // to its inner store; unregistered, the name would fall through to netlink
 // and a kernel interface of the same name. Once node.Stop returns, lease is closed and
 // has waited for its watches, so nothing calls wgdev for the name again.
 func (m *Mesh) Stop() {
-	m.mu.Lock()
-	for r := range m.relays {
-		r.Close() // relay.UDP closes the mesh side
-	}
-	clear(m.relays)
-	m.mu.Unlock()
 	m.node.Stop()
 	m.unregister()
 }

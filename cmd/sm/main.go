@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -35,28 +36,38 @@ type proc struct {
 	// configFile.
 	config     func() ([]byte, error)
 	configFile string
+	// expose are the local TCP ports this process's node serves on its
+	// mesh address, each to the same port on 127.0.0.1.
+	expose []uint16
 }
 
-// command is the command that runs this sm again, with its config.
+// command is the command that runs this sm again, with its config and
+// exposed ports.
 func (p proc) command() ([]string, error) {
-	if p.configFile == "" {
-		return p.exe, nil
+	cmd := slices.Clip(p.exe)
+	if p.configFile != "" {
+		abs, err := filepath.Abs(p.configFile)
+		if err != nil {
+			return nil, err
+		}
+		cmd = append(cmd, "--config", abs)
 	}
-	abs, err := filepath.Abs(p.configFile)
-	return append(slices.Clip(p.exe), "--config", abs), err
+	for _, port := range p.expose {
+		cmd = append(cmd, "--expose", strconv.Itoa(int(port)))
+	}
+	return cmd, nil
 }
 
 type applet func(args []string, p proc) int
 
 var applets = map[string]applet{
 	"config": configApplet,
-	"daemon": daemonApplet,
-	"down":   downApplet,
 	"keygen": keygen,
 	"mosh":   moshApplet,
 	"nc":     nc,
-	"status": status,
 }
+
+const usage = "usage: %s [--config FILE] [--expose PORT]... <applet> [args...]; %s --list shows applets\n"
 
 // fail reports an applet's error the way every applet does.
 func fail(p proc, applet string, err error) int {
@@ -82,12 +93,21 @@ func pick(argv []string) (string, []string) {
 
 func run(argv []string, p proc) int {
 	name, args := pick(argv)
-	if name == "--config" { // sm --config FILE <applet> ...
+	for name == "--config" || name == "--expose" {
 		if len(args) < 2 {
-			fmt.Fprintf(p.err, "usage: %s --config FILE <applet> [args...]\n", self)
+			fmt.Fprintf(p.err, usage, self, self)
 			return 2
 		}
-		p.config, p.configFile = configSource(args[0], ""), args[0]
+		if name == "--config" {
+			p.config, p.configFile = configSource(args[0], ""), args[0]
+		} else {
+			port, err := strconv.ParseUint(args[0], 10, 16)
+			if err != nil || port == 0 {
+				fmt.Fprintf(p.err, "%s: bad --expose port %q\n", self, args[0])
+				return 2
+			}
+			p.expose = append(p.expose, uint16(port))
+		}
 		name, args = args[1], args[2:]
 	}
 	if name == "--version" {
@@ -105,7 +125,7 @@ func run(argv []string, p proc) int {
 		if name != "" {
 			fmt.Fprintf(p.err, "%s: unknown applet %q\n", self, name)
 		}
-		fmt.Fprintf(p.err, "usage: %s <applet> [args...]; %s --list shows applets\n", self, self)
+		fmt.Fprintf(p.err, usage, self, self)
 		return 127
 	}
 	return a(args, p)

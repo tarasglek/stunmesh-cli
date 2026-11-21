@@ -8,32 +8,59 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
-// The far end reads to EOF before answering, so the answer arrives only
-// if splice half-closes after stdin ends.
-func TestSpliceHalfClose(t *testing.T) {
+// splice ends when either side does: the far end closing, or stdin's EOF
+// even with the far end silent, as when ssh is killed and the peer is
+// away, so the process and its exposed ports end with ssh.
+func TestSpliceEndsOnEitherSide(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
+	conns := make(chan net.Conn, 2)
 	go func() {
-		c, err := ln.Accept()
-		if err != nil {
-			return
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns <- c
 		}
-		defer c.Close()
-		b, _ := io.ReadAll(c)
-		_, _ = c.Write(append([]byte("got "), b...))
 	}()
-	c, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
+	dial := func() net.Conn {
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
 	}
+
+	// stdin ends; the far end stays open and silent.
+	c := dial()
 	defer c.Close()
+	far := <-conns
+	defer far.Close()
+	done := make(chan error, 1)
+	go func() { done <- splice(c, strings.NewReader("ping"), io.Discard) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("splice did not return at stdin's EOF")
+	}
+
+	// The far end answers and closes; stdin never ends.
+	c2 := dial()
+	defer c2.Close()
+	far2 := <-conns
+	far2.Write([]byte("pong"))
+	far2.Close()
+	pr, pw := io.Pipe()
+	defer pw.Close()
 	var out bytes.Buffer
-	if err := splice(c, strings.NewReader("ping"), &out); err != nil || out.String() != "got ping" {
+	if err := splice(c2, pr, &out); err != nil || out.String() != "pong" {
 		t.Errorf("splice = %q, %v", out.String(), err)
 	}
 }

@@ -53,20 +53,6 @@ func TestMoshSSHArgs(t *testing.T) {
 	}
 }
 
-// ssh's environment carries the config file sm was given, absolute, so
-// the ProxyCommand's sm nc reaches the same node.
-func TestBootstrapEnv(t *testing.T) {
-	p := testProc(nil, &bytes.Buffer{}, &bytes.Buffer{})
-	if env := bootstrapEnv(p); !slices.Equal(env, os.Environ()) {
-		t.Errorf("env without a config file: %q", env)
-	}
-	p.configFile = "node.json"
-	abs, _ := filepath.Abs("node.json")
-	if env := bootstrapEnv(p); env[len(env)-1] != "STUNMESH_CLI_CONFIG="+abs {
-		t.Errorf("env ends %q, want the absolute config", env[len(env)-1])
-	}
-}
-
 // fakeSSH writes a shell script standing in for ssh.
 func fakeSSH(t *testing.T, script string) string {
 	t.Helper()
@@ -81,14 +67,14 @@ func fakeSSH(t *testing.T, script string) string {
 // pty's CRs, reports ssh's failures, and gives up on a hung ssh.
 func TestBootstrap(t *testing.T) {
 	ssh := fakeSSH(t, `printf 'motd\r\nMOSH CONNECT 60001 AAAAAAAAAAAAAAAAAAAAAA\r\n'`)
-	port, key, err := bootstrap(t.Context(), ssh, nil, nil, io.Discard)
+	port, key, err := bootstrap(t.Context(), ssh, nil, io.Discard)
 	if err != nil || port != 60001 || key != "AAAAAAAAAAAAAAAAAAAAAA" {
 		t.Errorf("bootstrap = %d %q %v", port, key, err)
 	}
 
 	var errb bytes.Buffer
 	ssh = fakeSSH(t, "echo 'ssh: connect to host remote-01 port 22: refused' >&2; exit 255")
-	if _, _, err := bootstrap(t.Context(), ssh, nil, nil, &errb); err == nil || !strings.Contains(err.Error(), "exit status 255") || !strings.Contains(errb.String(), "refused") {
+	if _, _, err := bootstrap(t.Context(), ssh, nil, &errb); err == nil || !strings.Contains(err.Error(), "exit status 255") || !strings.Contains(errb.String(), "refused") {
 		t.Errorf("failing ssh: %v, stderr %q", err, errb.String())
 	}
 
@@ -96,7 +82,7 @@ func TestBootstrap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, _, err := bootstrap(ctx, ssh, nil, nil, io.Discard); err == nil || time.Since(start) > 5*time.Second {
+	if _, _, err := bootstrap(ctx, ssh, nil, io.Discard); err == nil || time.Since(start) > 5*time.Second {
 		t.Errorf("hung ssh: %v after %v", err, time.Since(start))
 	}
 }

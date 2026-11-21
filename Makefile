@@ -65,7 +65,7 @@ check: tidy vet test build
 ifeq ($(GOOS)-$(GOARCH),linux-$(GOHOSTARCH))
 	$(BIN) --list > /dev/null
 ifneq ($(NODE),)
-	$(BIN) status > /dev/null
+	$(BIN) config ssh > /dev/null
 endif
 endif
 

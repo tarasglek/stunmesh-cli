@@ -16,10 +16,12 @@ import (
 const dialTimeout = 30 * time.Second
 
 // nc connects stdin and stdout to a TCP port on a mesh host, for ssh
-// -o ProxyCommand='sm nc %h %p', scp, rsync and the like.
+// -o ProxyCommand='sm nc %h %p', scp, rsync and the like. The node runs in
+// this process and ends with it: with --expose, the ports are served for
+// exactly as long as the ssh session is up.
 func nc(args []string, p proc) int {
 	if len(args) != 2 {
-		fmt.Fprintf(p.err, "usage: %s nc host port\n", self)
+		fmt.Fprintf(p.err, "usage: %s [--expose PORT]... nc host port\n", self)
 		return 2
 	}
 	host := args[0]
@@ -36,24 +38,14 @@ func nc(args []string, p proc) int {
 	if err != nil {
 		return fail(p, "nc", err)
 	}
-	n, err := openNode(p, cfg, 0, addr)
+	m, err := startMesh(p, cfg, 0, addr)
 	if err != nil {
 		return fail(p, "nc", err)
 	}
-	defer n.Close()
+	defer m.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
-	// Given ssh's pipes, the daemon carries them itself, as the node in
-	// this process did, so the daemon adds no hop.
-	if d, ok := n.(*daemonClient); ok {
-		if in, out, ok := passable(p.in, p.out); ok {
-			if err := d.DialStdio(ctx, host, uint16(port), in, out); err != nil {
-				return fail(p, "nc", fmt.Errorf("%s:%d: %w%s", host, port, err, logHint(p)))
-			}
-			return 0
-		}
-	}
-	c, err := n.DialTCP(ctx, host, uint16(port))
+	c, err := m.DialTCP(ctx, host, uint16(port))
 	if err != nil {
 		return fail(p, "nc", fmt.Errorf("%s:%d: %w%s", host, port, err, logHint(p)))
 	}
@@ -64,29 +56,27 @@ func nc(args []string, p proc) int {
 	return 0
 }
 
-// splice copies in to c and c to out. At EOF on in it closes c for
-// writing, so the far end sees EOF and can still answer; it returns when
-// the far end closes, without waiting for in, which may never end.
+// splice copies in to c and c to out until either ends. ssh never closes
+// its end of a ProxyCommand's stdin while the session lives, so EOF there
+// means ssh is gone, even if it was killed and the far end is unreachable:
+// returning then ends this process, its node and its exposed ports.
 func splice(c net.Conn, in io.Reader, out io.Writer) error {
+	done := make(chan error, 2)
 	go func() {
-		_, _ = io.Copy(c, in)
-		if cw, ok := c.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
+		_, err := io.Copy(c, in)
+		done <- err
 	}()
-	_, err := io.Copy(out, c)
-	return err
+	go func() {
+		_, err := io.Copy(out, c)
+		done <- err
+	}()
+	return <-done
 }
 
 // logHint points at the node's log after a failed dial, which is where
 // the reason is (STUN failed, no record for the peer, the peer is away),
 // unless the user is already reading it.
 func logHint(p proc) string {
-	if useDaemon(p) {
-		if _, _, log, err := daemonPaths(p.getenv); err == nil {
-			return " (sm daemon's log: " + log + ")"
-		}
-	}
 	if p.getenv("STUNMESH_CLI_LOG") != "" {
 		return ""
 	}

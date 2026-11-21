@@ -26,7 +26,7 @@ export PATH=$PWD/build/bin:$PATH
 sm config ssh > ~/.ssh/sm.conf   # then "Include sm.conf" at the top of ~/.ssh/config
 ssh remote-01                # the system's OpenSSH over the node
 sm mosh remote-02            # mosh over the node; Ctrl-^ . quits
-sm status -w 30s remote-01   # hosts table, live peer state
+sm --expose 22 config ssh > ~/.ssh/sm.conf  # also serve local sshd to the host ssh'd to
 ```
 
 `make build NODE=...` builds the generic `build/sm-<os>-<arch>` and
@@ -43,7 +43,8 @@ with it first in PATH plain `mosh` is the applet.
 Termux on Android gets a `GOOS=android` build: Go then keeps clear of
 the system calls Android's seccomp kills apps for. Other Android apps'
 shells may run a file of theirs only through the linker, as
-`/system/bin/linker64 PATH ARGS`; sm run so starts its daemon so too.
+`/system/bin/linker64 PATH ARGS`; `sm config ssh` writes the
+ProxyCommand so.
 
 ## ssh and mosh
 
@@ -58,23 +59,28 @@ user, port and keys come from ssh_config too, then runs mosh-client
 against a UDP relay on 127.0.0.1 whose other end is in the node. The
 session is mosh's own: local echo prediction, the "last contact" notice,
 Ctrl-^ . to quit. `sm mosh --client=PATH` picks the mosh-client. mosh
-needs ssh and mosh-client here and mosh-server on the host. A binary
-given its config with `--config FILE` passes it on to ssh's `sm nc` as
-`STUNMESH_CLI_CONFIG`.
+needs ssh and mosh-client here and mosh-server on the host. ssh's
+`sm nc` is the node while ssh starts mosh-server; `sm mosh` takes over
+once it exits.
 
-## One node per user
+## One node per device, one session at a time
 
-The first applet that needs the mesh starts `sm daemon` in the
-background, and every later one, in any terminal, uses it, already
-joined. The applets reach it over HTTP on a unix socket,
-`$XDG_RUNTIME_DIR/sm.sock` or next to the key, which only the same user
-may use; its log is `sm.log` beside it. With no clients and no UDP relay
-a program still uses, it exits after 5 minutes; `sm down` stops it at
-once, and `sm daemon [-idle 0]` runs it in the foreground. The daemon
-joins every peer of the config, so on a large mesh its first dial waits
-on discovery for all of them. `STUNMESH_CLI_DAEMON=off` runs a node,
-narrowed to the peers the applet needs, inside the applet instead;
-`STUNMESH_CLI_LOG=info` then shows its log on stderr.
+Every applet that needs the mesh runs the node in its own process, joined
+only to the peer it talks to, and the node ends with the process: no
+daemon, no socket, no state on disk. The node's fixed UDP `listen_port`
+is its lock. While one process holds it, another `sm nc` or `sm mosh` on
+the device, from any app or user, fails at once with "already running"
+instead of fighting it for the peer. Sessions to one host can share a
+process with ssh's own `ControlMaster auto` (without `ControlPersist`,
+which would hold the node after the session).
+
+`sm --expose PORT <applet>` (repeatable) also serves TCP `PORT` on
+`127.0.0.1` at the node's mesh address, for as long as that process is
+the node: with `sm --expose 22 config ssh`, every `ssh` through the mesh
+lets the host at the other end `ssh` back to this device while the
+session is up. Only that host is a peer, so only it can connect.
+`STUNMESH_CLI_LOG=info` shows the node's log, with each exposed
+connection, on stderr.
 
 ## Build
 

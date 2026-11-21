@@ -6,9 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/netip"
+	"strconv"
 	"strings"
 
 	"github.com/tarasglek/stunmesh-cli/mesh"
+	"github.com/tarasglek/stunmesh-cli/relay"
 )
 
 func nodeConfig(p proc) (mesh.Config, error) {
@@ -19,15 +23,59 @@ func nodeConfig(p proc) (mesh.Config, error) {
 	return mesh.ParseConfig(b)
 }
 
-// startMesh brings this device's node up. $STUNMESH_CLI_LOG=debug, info,
-// warn or error shows its log at that level and above on stderr; without
-// it, verbose 1 shows info and 2 or more debug, as ssh -v and -vv.
-func startMesh(p proc, cfg mesh.Config, verbose int) (*mesh.Mesh, error) {
+// startMesh brings this device's node up in this process, for one session
+// with the host at peer: its only peer, so the only one that can reach
+// the ports in p.expose. The node lives as long as the process; its UDP
+// port keeps any other on the device from starting meanwhile
+// (mesh.ErrBusy). $STUNMESH_CLI_LOG=debug, info, warn or error shows its
+// log at that level and above on stderr; without it, verbose 1 shows info
+// and 2 or more debug, as ssh -v and -vv.
+func startMesh(p proc, cfg mesh.Config, verbose int, peer netip.Addr) (*mesh.Mesh, error) {
 	priv, err := loadKey(p)
 	if err != nil {
 		return nil, err
 	}
-	return mesh.Start(cfg, priv, logger(p, verbose))
+	if cfg, err = cfg.Narrow(peer); err != nil {
+		return nil, err
+	}
+	log := logger(p, verbose)
+	if log == nil {
+		log = func(string, string) {}
+	}
+	m, err := mesh.Start(cfg, priv, log)
+	if err != nil {
+		return nil, err
+	}
+	for _, port := range p.expose {
+		ln, err := m.ListenTCP(port)
+		if err != nil {
+			m.Stop()
+			return nil, fmt.Errorf("expose %d: %w", port, err)
+		}
+		go expose(ln, port, log)
+	}
+	return m, nil
+}
+
+// expose connects each mesh connection ln accepts to port on 127.0.0.1.
+func expose(ln net.Listener, port uint16, log mesh.Logger) {
+	target := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			t, err := net.Dial("tcp", target)
+			if err != nil {
+				log("warn", fmt.Sprintf("expose: %s to %s: %v", c.RemoteAddr(), target, err))
+				c.Close()
+				return
+			}
+			log("info", fmt.Sprintf("expose: %s to %s", c.RemoteAddr(), target))
+			relay.Pipe(c, t)
+		}()
+	}
 }
 
 // loadKey reads this device's private key.

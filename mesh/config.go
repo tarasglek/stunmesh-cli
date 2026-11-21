@@ -52,6 +52,9 @@ func ParseConfig(data []byte) (Config, error) {
 	if doc.Name == "" {
 		return Config{}, errors.New("node config: no name")
 	}
+	if doc.Interface.ListenPort == 0 {
+		return Config{}, errors.New("node config: no listen_port; the node's fixed UDP port is what keeps it to one process")
+	}
 	if len(doc.Interface.Addresses) != 1 {
 		return Config{}, fmt.Errorf("node config: want one interface address, have %d", len(doc.Interface.Addresses))
 	}

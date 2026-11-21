@@ -59,7 +59,7 @@ func TestPick(t *testing.T) {
 		{[]string{"/x/build/bin/mosh", "desk"}, "mosh", []string{"desk"}},
 		{[]string{"sm", "mosh", "desk"}, "mosh", []string{"desk"}},
 		{[]string{"./build/sm", "nc", "desk", "22"}, "nc", []string{"desk", "22"}},
-		{[]string{"build/sm-desk-cli-linux-amd64", "status"}, "status", nil},
+		{[]string{"build/sm-desk-cli-linux-amd64", "config"}, "config", nil},
 		{[]string{"sm"}, "", nil},
 		{[]string{"/usr/bin/stunmesh-cli", "nc"}, "stunmesh-cli", []string{"nc"}}, // any other name is an applet's
 		{[]string{"smash", "x"}, "smash", []string{"x"}},                          // a prefix of sm- only
@@ -73,8 +73,7 @@ func TestPick(t *testing.T) {
 }
 
 // testProc is a process with environment env, no stdin and the node
-// config in env["config"], if any. Its node is in the process, as with
-// $STUNMESH_CLI_DAEMON=off, unless env says otherwise.
+// config in env["config"], if any.
 func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
 	config := func() ([]byte, error) {
 		if c, ok := env["config"]; ok {
@@ -84,13 +83,8 @@ func testProc(env map[string]string, out, errb *bytes.Buffer) proc {
 	}
 	return proc{
 		in: strings.NewReader(""), out: out, err: errb,
-		getenv: func(k string) string {
-			if v, ok := env[k]; ok || k != "STUNMESH_CLI_DAEMON" {
-				return v
-			}
-			return "off"
-		},
-		rand: rand.Reader, exe: []string{"/x/sm"}, config: config,
+		getenv: func(k string) string { return env[k] },
+		rand:   rand.Reader, exe: []string{"/x/sm"}, config: config,
 	}
 }
 
@@ -103,7 +97,7 @@ func runEnv(env map[string]string, argv ...string) (int, string, string) {
 func runCapture(argv ...string) (int, string, string) { return runEnv(nil, argv...) }
 
 func TestRun(t *testing.T) {
-	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "config\ndaemon\ndown\nkeygen\nmosh\nnc\nstatus\n" {
+	if code, out, _ := runCapture("sm", "--list"); code != 0 || out != "config\nkeygen\nmosh\nnc\n" {
 		t.Errorf("--list: %d %q", code, out)
 	}
 	if code, out, _ := runCapture("sm", "--version"); code != 0 || !strings.HasPrefix(out, "sm ") {
@@ -114,5 +108,29 @@ func TestRun(t *testing.T) {
 	}
 	if code, _, errs := runCapture("sm"); code != 127 || !strings.Contains(errs, "usage:") {
 		t.Errorf("no applet: %d %q", code, errs)
+	}
+}
+
+// --expose takes ports in 1-65535, any number of times, before the applet,
+// mixed with --config; sm run again carries them on.
+func TestExposeFlag(t *testing.T) {
+	for _, args := range [][]string{{"--expose"}, {"--expose", "0", "config"}, {"--expose", "x", "config"}, {"--expose", "65536", "config"}, {"--expose", "22"}} {
+		if code, _, errs := runEnv(map[string]string{"config": testConfig}, append([]string{"sm"}, args...)...); code != 2 || errs == "" {
+			t.Errorf("%q: %d %q, want 2", args, code, errs)
+		}
+	}
+	var out, errb bytes.Buffer
+	p := testProc(map[string]string{"config": testConfig}, &out, &errb)
+	p.exe = []string{"/linker64", "/x/sm"}
+	conf := filepath.Join(t.TempDir(), "node.json")
+	if err := os.WriteFile(conf, []byte(testConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"sm", "--expose", "22", "--config", conf, "--expose", "8022", "config", "ssh"}, p); code != 0 {
+		t.Fatalf("config ssh: %d %s", code, errb.String())
+	}
+	want := "ProxyCommand /linker64 /x/sm --config " + conf + " --expose 22 --expose 8022 nc %h %p\n"
+	if !strings.HasSuffix(out.String(), want) {
+		t.Errorf("config ssh ends %q, want %q", out.String()[strings.LastIndex(out.String()[:out.Len()-1], "\n")+1:], want)
 	}
 }

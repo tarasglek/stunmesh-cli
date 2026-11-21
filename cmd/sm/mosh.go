@@ -10,12 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/tarasglek/stunmesh-cli/mesh"
 	"github.com/tarasglek/stunmesh-cli/moshc"
 	"golang.org/x/term"
 )
@@ -73,20 +73,24 @@ func moshApplet(args []string, p proc) int {
 	dbg := debugf(p, "mosh", verbose)
 	dbg("%s is %s in the hosts table", host, addr)
 
-	// First, so that an in-process node (STUNMESH_CLI_DAEMON=off) is up
-	// only after ssh's sm nc has let the peer go.
+	// ssh first: its ProxyCommand's sm nc is the device's node until it
+	// exits, which it may do just after ssh, so this one retries a moment.
 	ctx, cancel := context.WithTimeout(context.Background(), moshc.BootstrapTimeout)
-	port, key, err := bootstrap(ctx, "ssh", moshSSHArgs(dest, command, verbose), bootstrapEnv(p), p.err)
+	port, key, err := bootstrap(ctx, "ssh", moshSSHArgs(dest, command, verbose), p.err)
 	cancel()
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
-	n, err := openNode(p, cfg, verbose, addr)
+	m, err := startMesh(p, cfg, verbose, addr)
+	for wait := time.Now().Add(2 * time.Second); errors.Is(err, mesh.ErrBusy) && time.Now().Before(wait); {
+		time.Sleep(50 * time.Millisecond)
+		m, err = startMesh(p, cfg, verbose, addr)
+	}
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
-	defer n.Close()
-	local, stop, err := n.UDPRelay(host, port)
+	defer m.Stop()
+	local, stop, err := m.UDPRelay(host, port)
 	if err != nil {
 		return fail(p, "mosh", err)
 	}
@@ -110,25 +114,12 @@ func moshSSHArgs(dest string, command []string, verbose int) []string {
 	return append(args, dest, "--", moshc.ServerCommand(command))
 }
 
-// bootstrapEnv is ssh's environment: this one, plus the node config file
-// sm was given, if any, so that ssh's sm nc serves from the same node as
-// this sm; were they to differ, the daemon would refuse one of them.
-func bootstrapEnv(p proc) []string {
-	env := os.Environ()
-	if p.configFile != "" {
-		if abs, err := filepath.Abs(p.configFile); err == nil {
-			env = append(env, "STUNMESH_CLI_CONFIG="+abs)
-		}
-	}
-	return env
-}
-
-// bootstrap runs ssh with args and env and returns the port and key from
+// bootstrap runs ssh with args and returns the port and key from
 // mosh-server's MOSH CONNECT line. ssh's prompts go to the terminal and
 // its errors to errw; ctx bounds it all.
-func bootstrap(ctx context.Context, ssh string, args, env []string, errw io.Writer) (uint16, string, error) {
+func bootstrap(ctx context.Context, ssh string, args []string, errw io.Writer) (uint16, string, error) {
 	cmd := exec.CommandContext(ctx, ssh, args...)
-	cmd.Env, cmd.Stderr = env, errw
+	cmd.Stderr = errw
 	cmd.WaitDelay = time.Second // a killed ssh's children may hold its stdout
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
